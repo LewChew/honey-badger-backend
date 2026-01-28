@@ -39,9 +39,28 @@ class SendGridService {
     }
 
     /**
+     * Send email with retry logic
+     */
+    async sendWithRetry(msg, retries = 3) {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                await sgMail.send(msg);
+                return { success: true, message: 'Email sent successfully' };
+            } catch (error) {
+                console.error(`❌ Email send attempt ${attempt}/${retries} failed:`, error.message);
+                if (attempt === retries) {
+                    throw error;
+                }
+                // Wait before retrying (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+            }
+        }
+    }
+
+    /**
      * Send initial gift notification email to recipient
      */
-    async sendInitialGiftEmail(recipientEmail, giftData) {
+    async sendInitialGiftEmail(recipientEmail, giftData, retries = 3) {
         if (!this.initialized) {
             console.log('SendGrid not initialized, skipping email send');
             return { success: false, message: 'SendGrid not configured' };
@@ -61,9 +80,9 @@ class SendGridService {
                 html: this.createInitialEmailHtml(giftData)
             };
 
-            await sgMail.send(msg);
+            const result = await this.sendWithRetry(msg, retries);
             console.log(`✅ Initial gift email sent to ${recipientEmail}`);
-            return { success: true, message: 'Email sent successfully' };
+            return result;
         } catch (error) {
             console.error('❌ Failed to send initial gift email:', error.message);
             if (error.response) {
@@ -131,9 +150,9 @@ class SendGridService {
                 html: this.createCompletionEmailHtml(giftData)
             };
 
-            await sgMail.send(msg);
+            const result = await this.sendWithRetry(msg);
             console.log(`✅ Completion email sent to ${recipientEmail}`);
-            return { success: true, message: 'Completion email sent successfully' };
+            return result;
         } catch (error) {
             console.error('❌ Failed to send completion email:', error.message);
             if (error.response) {
@@ -141,6 +160,122 @@ class SendGridService {
             }
             return { success: false, message: error.message };
         }
+    }
+
+    /**
+     * Send approval notification to sender when recipient submits a photo
+     */
+    async sendApprovalNotificationEmail(senderEmail, submissionData) {
+        if (!this.initialized) {
+            console.log('SendGrid not initialized, skipping email send');
+            return { success: false, message: 'SendGrid not configured' };
+        }
+
+        try {
+            const { recipientName, photoUrl, giftType, challengeDescription } = submissionData;
+
+            const msg = {
+                to: senderEmail,
+                from: {
+                    email: this.fromEmail,
+                    name: this.fromName
+                },
+                subject: `🦡 ${recipientName} submitted a photo for your Honey Badger gift!`,
+                text: this.createApprovalNotificationText(submissionData),
+                html: this.createApprovalNotificationHtml(submissionData)
+            };
+
+            const result = await this.sendWithRetry(msg);
+            console.log(`✅ Approval notification email sent to ${senderEmail}`);
+            return result;
+        } catch (error) {
+            console.error('❌ Failed to send approval notification email:', error.message);
+            if (error.response) {
+                console.error('SendGrid error details:', error.response.body);
+            }
+            return { success: false, message: error.message };
+        }
+    }
+
+    createApprovalNotificationText(submissionData) {
+        const { recipientName, giftType, challengeDescription, photoUrl } = submissionData;
+
+        return `
+${recipientName} has submitted a photo for their Honey Badger challenge!
+
+Gift: ${giftType}
+Challenge: ${challengeDescription}
+
+Please open the Honey Badger app to review and approve their submission.
+
+If you approve, their gift will be unlocked immediately!
+
+Best regards,
+The Honey Badger Team
+        `.trim();
+    }
+
+    createApprovalNotificationHtml(submissionData) {
+        const { recipientName, giftType, challengeDescription, photoUrl } = submissionData;
+        const baseUrl = process.env.BASE_URL || 'https://honeybadgerapp.com';
+
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 20px auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #1a1a1a 0%, #0d0d0d 100%); color: #E2FF00; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 28px; }
+        .content { padding: 30px; }
+        .photo-preview { background: #f9f9f9; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+        .photo-preview img { max-width: 100%; max-height: 300px; border-radius: 8px; }
+        .details-box { background: #f9f9f9; border-left: 4px solid #E2FF00; padding: 15px; margin: 20px 0; }
+        .button { display: inline-block; background: #E2FF00; color: #1a1a1a; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
+        .footer { background: #f4f4f4; padding: 20px; text-align: center; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🦡 Photo Submission Received!</h1>
+        </div>
+        <div class="content">
+            <h2>${recipientName} submitted a photo!</h2>
+            <p>They've completed their challenge and are waiting for your approval to unlock their gift.</p>
+
+            ${photoUrl ? `
+            <div class="photo-preview">
+                <h3>📸 Submitted Photo</h3>
+                <img src="${baseUrl}${photoUrl}" alt="Challenge submission" style="max-width: 100%; border-radius: 8px;" />
+            </div>
+            ` : ''}
+
+            <div class="details-box">
+                <h3>Gift Details</h3>
+                <p><strong>Gift Type:</strong> ${giftType}</p>
+                <p><strong>Challenge:</strong> ${challengeDescription}</p>
+            </div>
+
+            <p style="text-align: center;">
+                <strong>Open the Honey Badger app to review and approve!</strong>
+            </p>
+
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="${baseUrl}/approvals" class="button">Review Submission</a>
+            </div>
+        </div>
+        <div class="footer">
+            <p>Best regards,<br>The Honey Badger Team</p>
+            <p style="margin-top: 20px;">🍯 Honey Badger AI Gifts - Motivation meets rewards</p>
+        </div>
+    </div>
+</body>
+</html>
+        `.trim();
     }
 
     // Text email templates

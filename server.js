@@ -76,6 +76,9 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve uploaded files (photos)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -332,6 +335,82 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
         res.json({
             success: true,
             message: 'Logged out successfully'
+        });
+    }
+});
+
+// Update user profile
+app.put('/api/auth/profile', authenticateToken, [
+    body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
+        }
+
+        const { name } = req.body;
+        const userId = req.user.id;
+
+        await db.updateUserProfile(userId, { name });
+
+        console.log('✅ Profile updated for user:', req.user.email);
+        res.json({
+            success: true,
+            message: 'Profile updated successfully'
+        });
+    } catch (error) {
+        console.error('Profile update error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Error updating profile'
+        });
+    }
+});
+
+// Change password
+app.put('/api/auth/password', authenticateToken, [
+    body('currentPassword').notEmpty().withMessage('Current password is required'),
+    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters')
+        .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase, and number')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
+        }
+
+        const { currentPassword, newPassword } = req.body;
+        const userId = req.user.id;
+
+        await db.changePasswordById(userId, currentPassword, newPassword);
+
+        console.log('✅ Password changed for user:', req.user.email);
+        res.json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        console.error('Password change error:', error);
+
+        if (error.message === 'Current password is incorrect') {
+            return res.status(401).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Error changing password'
         });
     }
 });
@@ -888,6 +967,7 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
         deliveryMethod,
         giftType,
         giftValue,
+        giftAmount, // iOS app sends this
         challengeType,
         challengeDescription,
         challenge, // Legacy field
@@ -895,6 +975,9 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
         message, // Legacy field
         duration
     } = req.body;
+
+    // Use giftAmount if giftValue is not provided (for iOS app compatibility)
+    const finalGiftValue = giftValue || giftAmount || 'A special gift';
 
     console.log('New Honey Badger request from:', req.user.email, req.body);
 
@@ -911,8 +994,8 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
                 deliveryMethod: deliveryMethod || (recipientEmail ? 'email' : 'sms'),
                 giftType,
                 giftDetails: {
-                    value: giftValue,
-                    description: giftValue,
+                    value: finalGiftValue,
+                    description: finalGiftValue,
                     personalMessage: personalNote || message
                 },
                 challengeType: challengeType || 'custom',
@@ -931,10 +1014,35 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
             const result = response.data;
 
             if (result.success) {
+                // Save to database for persistent storage
+                const trackingId = result.data?.giftId || 'HB' + Date.now();
+                try {
+                    await db.createGiftOrder(req.user.id, {
+                        trackingId,
+                        recipientName,
+                        recipientEmail,
+                        recipientPhone: recipientPhone || recipientContact,
+                        deliveryMethod: deliveryMethod || (recipientEmail ? 'email' : 'sms'),
+                        giftType,
+                        giftValue: finalGiftValue,
+                        challenge: challengeDescription || challenge,
+                        challengeType: challengeType || 'custom',
+                        challengeDescription: challengeDescription || challenge,
+                        personalNote: personalNote || message,
+                        duration: duration || 1
+                    });
+                    console.log('✅ Gift saved to database with tracking ID:', trackingId);
+                } catch (dbError) {
+                    console.error('⚠️  Failed to save gift to database:', dbError.message);
+                    // Don't fail the request if database save fails
+                }
+
                 return res.json({
                     success: true,
                     message: 'Honey Badger sent successfully!',
-                    trackingId: result.data?.giftId || 'HB' + Date.now(),
+                    giftId: result.data?.giftId || trackingId,
+                    challengeId: result.data?.challengeId,
+                    trackingId,
                     sender: req.user.name,
                     deliveryResults: result.data?.messageSent
                 });
@@ -1012,23 +1120,76 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             giftValue: order.gift_value,
             challenge: order.challenge_description || order.challenge,
             challengeType: order.challenge_type,
+            challengeDescription: order.challenge_description || order.challenge,
             verificationType: order.verification_type,
             status: order.status,
             createdAt: order.created_at,
             deliveryMethod: order.delivery_method,
             duration: order.duration,
-            reminderFrequency: order.reminder_frequency
+            reminderFrequency: order.reminder_frequency,
+            personalNote: order.personal_note,
+            message: order.message
         }));
 
         res.json({
             success: true,
-            honeyBadgers
+            gifts: honeyBadgers  // iOS app expects 'gifts' field
         });
     } catch (error) {
         console.error('Error fetching honey badgers:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch honey badgers: ' + error.message
+        });
+    }
+});
+
+// Get gifts received by the current user
+app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
+    try {
+        // Get user details to match against recipient info
+        const user = await db.getUserById(req.user.id);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        const receivedGifts = await db.getReceivedGifts(user.email, user.phone);
+
+        // Format gifts for frontend
+        const formattedGifts = receivedGifts.map(gift => ({
+            id: gift.tracking_id,
+            senderName: gift.sender_name,
+            senderEmail: gift.sender_email,
+            recipientName: gift.recipient_name,
+            recipientEmail: gift.recipient_email,
+            recipientPhone: gift.recipient_phone,
+            giftType: gift.gift_type,
+            giftValue: gift.gift_value,
+            challenge: gift.challenge_description || gift.challenge,
+            challengeType: gift.challenge_type,
+            challengeDescription: gift.challenge_description || gift.challenge,
+            verificationType: gift.verification_type,
+            status: gift.status,
+            createdAt: gift.created_at,
+            deliveryMethod: gift.delivery_method,
+            duration: gift.duration,
+            reminderFrequency: gift.reminder_frequency,
+            personalNote: gift.personal_note,
+            message: gift.message
+        }));
+
+        res.json({
+            success: true,
+            gifts: formattedGifts
+        });
+    } catch (error) {
+        console.error('Error fetching received gifts:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch received gifts: ' + error.message
         });
     }
 });

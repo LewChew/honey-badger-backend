@@ -213,6 +213,65 @@ class TwilioService {
 
         return this.sendSMS(phoneNumber, message);
     }
+
+    /**
+     * Send approval request SMS to sender
+     * @param {string} senderPhone - Sender's phone number
+     * @param {string} recipientName - Name of the gift recipient
+     * @returns {Promise} - Twilio message response
+     */
+    async sendApprovalRequestSMS(senderPhone, recipientName) {
+        const message = `🦡 ${recipientName} just submitted a photo for their Honey Badger challenge!\n\n` +
+            `Open the app to review and approve their submission. 📸\n\n` +
+            `Once approved, their gift will be unlocked!`;
+
+        return this.sendSMS(senderPhone, message);
+    }
+
+    /**
+     * Send gift unlocked SMS to recipient
+     * @param {string} recipientPhone - Recipient's phone number
+     * @param {string} giftType - Type of gift
+     * @param {string} giftValue - Value/description of gift
+     * @returns {Promise} - Twilio message response
+     */
+    async sendGiftUnlockedSMS(recipientPhone, giftType, giftValue) {
+        const message = `🎉 CONGRATULATIONS! 🎉\n\n` +
+            `🦡 Your photo has been approved!\n\n` +
+            `🎁 Your ${giftType} gift is now UNLOCKED!\n` +
+            `${giftValue ? `Value: ${giftValue}` : ''}\n\n` +
+            `The Honey Badger is proud of you! 💪`;
+
+        return this.sendSMS(recipientPhone, message);
+    }
+
+    /**
+     * Send submission rejected SMS to recipient
+     * @param {string} recipientPhone - Recipient's phone number
+     * @param {string} reason - Rejection reason (optional)
+     * @returns {Promise} - Twilio message response
+     */
+    async sendSubmissionRejectedSMS(recipientPhone, reason = null) {
+        const reasonText = reason ? `\n\nReason: ${reason}` : '';
+        const message = `🦡 Your photo submission wasn't approved this time.${reasonText}\n\n` +
+            `Don't give up! Send another photo to complete your challenge.\n\n` +
+            `The Honey Badger believes in you! 💪`;
+
+        return this.sendSMS(recipientPhone, message);
+    }
+
+    /**
+     * Send photo received confirmation to recipient
+     * @param {string} recipientPhone - Recipient's phone number
+     * @returns {Promise} - Twilio message response
+     */
+    async sendPhotoReceivedSMS(recipientPhone) {
+        const message = `🦡 Photo received! 📸\n\n` +
+            `Your submission has been sent to the gift sender for approval.\n\n` +
+            `You'll be notified once it's reviewed. Hang tight!`;
+
+        return this.sendSMS(recipientPhone, message);
+    }
 }
 
 // Export singleton instance

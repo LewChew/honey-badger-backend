@@ -3,6 +3,11 @@ const router = express.Router();
 const twilio = require('twilio');
 const { v4: uuidv4 } = require('uuid');
 const sendGridService = require('../../services/sendGridService');
+const db = require('../../services/databaseService');
+const path = require('path');
+const fs = require('fs');
+const https = require('https');
+const http = require('http');
 
 // Initialize Twilio client (conditional)
 let twilioClient = null;
@@ -20,10 +25,12 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   console.log('ℹ️  Twilio not configured - SMS delivery will be disabled');
 }
 
-// In-memory storage (replace with database in production)
-const gifts = new Map();
-const challenges = new Map();
-const recipients = new Map();
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '../../uploads/photos');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('📁 Created uploads/photos directory');
+}
 
 /**
  * Create a new gift/challenge combination
@@ -58,7 +65,7 @@ router.post('/gifts', async (req, res) => {
     const giftId = uuidv4();
     const challengeId = uuidv4();
 
-    // Create gift object
+    // Create gift object for response
     const gift = {
       id: giftId,
       senderName: senderName || 'Someone special',
@@ -75,7 +82,7 @@ router.post('/gifts', async (req, res) => {
       unlocked: false
     };
 
-    // Create challenge object
+    // Create challenge in database
     const challenge = {
       id: challengeId,
       giftId,
@@ -89,24 +96,17 @@ router.post('/gifts', async (req, res) => {
         totalSteps: challengeRequirements?.totalSteps || 1,
         submissions: []
       },
-      reminderFrequency: reminderFrequency || 'daily',
-      lastReminderSent: null
+      reminderFrequency: reminderFrequency || 'daily'
     };
 
-    // Store in memory (replace with database)
-    gifts.set(giftId, gift);
-    challenges.set(challengeId, challenge);
-
-    // Store recipient info
-    if (!recipients.has(recipientPhone)) {
-      recipients.set(recipientPhone, {
-        phone: recipientPhone,
-        name: recipientName,
-        activeGifts: [],
-        completedGifts: []
-      });
+    // Store challenge in database
+    try {
+      await db.createChallenge(challenge);
+      console.log('✅ Challenge created in database:', challengeId);
+    } catch (dbError) {
+      console.error('⚠️ Failed to create challenge in database:', dbError.message);
+      // Continue anyway - the gift can still be sent
     }
-    recipients.get(recipientPhone).activeGifts.push(giftId);
 
     // Send initial message
     const initialMessage = await sendInitialMessage(gift, challenge);
@@ -138,16 +138,39 @@ router.post('/gifts', async (req, res) => {
 router.post('/messages/send-initial', async (req, res) => {
   try {
     const { giftId } = req.body;
-    
-    const gift = gifts.get(giftId);
-    if (!gift) {
+
+    // Get gift from database
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
       return res.status(404).json({
         success: false,
         message: 'Gift not found'
       });
     }
 
-    const challenge = challenges.get(gift.challengeId);
+    // Convert to gift format expected by sendInitialMessage
+    const gift = {
+      id: giftOrder.tracking_id,
+      senderName: giftOrder.sender_name || 'Someone special',
+      recipientName: giftOrder.recipient_name,
+      recipientPhone: giftOrder.recipient_phone,
+      recipientEmail: giftOrder.recipient_email,
+      deliveryMethod: giftOrder.delivery_method || 'email',
+      type: giftOrder.gift_type,
+      details: {
+        value: giftOrder.gift_value,
+        description: giftOrder.gift_value,
+        personalMessage: giftOrder.personal_note || giftOrder.message
+      },
+      challengeId: giftOrder.challenge_id
+    };
+
+    // Get challenge from database
+    const challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : {
+      type: giftOrder.challenge_type || 'custom',
+      description: giftOrder.challenge_description || giftOrder.challenge
+    };
+
     const result = await sendInitialMessage(gift, challenge);
 
     res.json(result);
@@ -168,8 +191,9 @@ router.post('/messages/send-initial', async (req, res) => {
 router.post('/messages/send-reminder', async (req, res) => {
   try {
     const { challengeId, customMessage } = req.body;
-    
-    const challenge = challenges.get(challengeId);
+
+    // Get challenge from database
+    const challenge = await db.getChallengeById(challengeId);
     if (!challenge) {
       return res.status(404).json({
         success: false,
@@ -177,8 +201,29 @@ router.post('/messages/send-reminder', async (req, res) => {
       });
     }
 
-    const gift = gifts.get(challenge.giftId);
+    // Get gift from database
+    const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
+    if (!giftOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Gift not found'
+      });
+    }
+
+    const gift = {
+      senderName: giftOrder.sender_name || 'Someone special',
+      recipientPhone: giftOrder.recipient_phone,
+      type: giftOrder.gift_type
+    };
+
     const reminderMessage = customMessage || generateReminderMessage(gift, challenge);
+
+    if (!twilioClient) {
+      return res.status(503).json({
+        success: false,
+        message: 'SMS service not configured'
+      });
+    }
 
     const message = await twilioClient.messages.create({
       body: reminderMessage,
@@ -186,9 +231,8 @@ router.post('/messages/send-reminder', async (req, res) => {
       to: gift.recipientPhone
     });
 
-    // Update last reminder sent
-    challenge.lastReminderSent = new Date();
-    challenges.set(challengeId, challenge);
+    // Update last reminder sent in database
+    await db.updateChallengeReminderSent(challengeId);
 
     res.json({
       success: true,
@@ -212,11 +256,12 @@ router.post('/messages/send-reminder', async (req, res) => {
  * Track challenge progress
  * GET /api/challenges/:challengeId/progress
  */
-router.get('/challenges/:challengeId/progress', (req, res) => {
+router.get('/challenges/:challengeId/progress', async (req, res) => {
   try {
     const { challengeId } = req.params;
-    
-    const challenge = challenges.get(challengeId);
+
+    // Get challenge from database
+    const challenge = await db.getChallengeById(challengeId);
     if (!challenge) {
       return res.status(404).json({
         success: false,
@@ -224,18 +269,19 @@ router.get('/challenges/:challengeId/progress', (req, res) => {
       });
     }
 
-    const gift = gifts.get(challenge.giftId);
+    // Get gift from database
+    const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
 
     res.json({
       success: true,
       data: {
         challengeId,
-        giftId: challenge.giftId,
+        giftId: challenge.gift_id,
         type: challenge.type,
         description: challenge.description,
         progress: challenge.progress,
-        giftStatus: gift.status,
-        unlocked: gift.unlocked,
+        giftStatus: giftOrder ? giftOrder.status : 'unknown',
+        unlocked: giftOrder ? giftOrder.unlocked : false,
         percentComplete: (challenge.progress.currentStep / challenge.progress.totalSteps) * 100
       }
     });
@@ -257,8 +303,9 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
   try {
     const { challengeId } = req.params;
     const { stepCompleted, submission, metadata } = req.body;
-    
-    const challenge = challenges.get(challengeId);
+
+    // Get challenge from database
+    const challenge = await db.getChallengeById(challengeId);
     if (!challenge) {
       return res.status(404).json({
         success: false,
@@ -289,29 +336,30 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
     }
 
     // Check if challenge is completed
+    let giftUnlocked = false;
     if (challenge.progress.currentStep >= challenge.progress.totalSteps) {
       challenge.progress.completed = true;
-      
-      // Unlock the gift
-      const gift = gifts.get(challenge.giftId);
-      gift.unlocked = true;
-      gift.status = 'completed';
-      gift.unlockedAt = new Date();
-      gifts.set(challenge.giftId, gift);
+      giftUnlocked = true;
 
-      // Send completion message
-      await sendCompletionMessage(gift, challenge);
+      // Unlock the gift in database
+      const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
+      if (giftOrder) {
+        await db.unlockGiftOrder(challenge.gift_id);
 
-      // Update recipient records
-      const recipient = recipients.get(gift.recipientPhone);
-      if (recipient) {
-        recipient.activeGifts = recipient.activeGifts.filter(id => id !== challenge.giftId);
-        recipient.completedGifts.push(challenge.giftId);
-        recipients.set(gift.recipientPhone, recipient);
+        // Send completion message
+        const gift = {
+          senderName: giftOrder.sender_name || 'Someone special',
+          recipientPhone: giftOrder.recipient_phone,
+          recipientEmail: giftOrder.recipient_email,
+          type: giftOrder.gift_type,
+          details: { redemptionInstructions: giftOrder.personal_note || giftOrder.message }
+        };
+        await sendCompletionMessage(gift, challenge);
       }
     }
 
-    challenges.set(challengeId, challenge);
+    // Update challenge progress in database
+    await db.updateChallengeProgress(challengeId, challenge.progress);
 
     res.json({
       success: true,
@@ -319,7 +367,7 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
         challengeId,
         progress: challenge.progress,
         completed: challenge.progress.completed,
-        giftUnlocked: challenge.progress.completed
+        giftUnlocked
       }
     });
   } catch (error) {
@@ -339,66 +387,132 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
 router.post('/webhooks/twilio/incoming', async (req, res) => {
   try {
     const { From, Body, NumMedia, MediaUrl0, MediaContentType0 } = req.body;
-    
-    console.log('Received message from:', From);
-    console.log('Message body:', Body);
 
-    // Find recipient and their active challenges
-    const recipient = recipients.get(From);
-    if (!recipient || recipient.activeGifts.length === 0) {
+    console.log('📱 Received message from:', From);
+    console.log('   Message body:', Body);
+    console.log('   Media count:', NumMedia);
+
+    if (!twilioClient) {
+      console.error('❌ Twilio client not configured');
+      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
+    // Find active gifts for this recipient from database
+    const activeGifts = await db.getActiveGiftsByRecipientPhone(From);
+
+    if (!activeGifts || activeGifts.length === 0) {
       // No active challenges for this number
       await twilioClient.messages.create({
         body: "🦡 Hi! You don't have any active challenges right now. Ask your friend to send you a Honey Badger gift!",
         from: process.env.TWILIO_PHONE_NUMBER,
         to: From
       });
-      
+
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
     // Process the response based on active challenges
     let responseMessage = '';
-    
-    for (const giftId of recipient.activeGifts) {
-      const gift = gifts.get(giftId);
-      const challenge = challenges.get(gift.challengeId);
-      
-      // Check if response matches challenge requirements
-      const validResponse = await validateResponse(challenge, Body, NumMedia, MediaUrl0);
-      
-      if (validResponse) {
-        // Update progress
-        challenge.progress.currentStep++;
-        challenge.progress.submissions.push({
-          timestamp: new Date(),
-          type: NumMedia > 0 ? 'media' : 'text',
-          data: {
-            body: Body,
-            mediaUrl: MediaUrl0,
-            mediaType: MediaContentType0
-          }
-        });
 
-        if (challenge.progress.currentStep >= challenge.progress.totalSteps) {
-          // Challenge completed!
-          challenge.progress.completed = true;
-          gift.unlocked = true;
-          gift.status = 'completed';
-          gifts.set(giftId, gift);
-          
-          responseMessage = await getCompletionMessage(gift, challenge);
-          
-          // Update recipient records
-          recipient.activeGifts = recipient.activeGifts.filter(id => id !== giftId);
-          recipient.completedGifts.push(giftId);
+    for (const giftOrder of activeGifts) {
+      // Get challenge from database
+      let challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : null;
+
+      // Create challenge object if it doesn't exist
+      if (!challenge) {
+        challenge = {
+          id: uuidv4(),
+          type: giftOrder.challenge_type || 'photo',
+          description: giftOrder.challenge_description || giftOrder.challenge,
+          progress: { started: false, completed: false, currentStep: 0, totalSteps: 1, submissions: [] }
+        };
+      }
+
+      // Check if response matches challenge requirements (photo challenges need media)
+      const hasPhoto = parseInt(NumMedia) > 0;
+      const validResponse = await validateResponse(challenge, Body, NumMedia, MediaUrl0);
+
+      if (validResponse) {
+        // Handle photo submission with approval workflow
+        if (hasPhoto && (challenge.type === 'photo' || challenge.type === 'video')) {
+          // Download the photo from Twilio
+          const photoUrl = await downloadTwilioMedia(MediaUrl0, giftOrder.tracking_id);
+
+          // Create photo submission record with pending_approval status
+          const submissionId = uuidv4();
+          await db.createPhotoSubmission({
+            id: submissionId,
+            challengeId: challenge.id || giftOrder.challenge_id,
+            giftId: giftOrder.tracking_id,
+            photoUrl: photoUrl,
+            submitterPhone: From,
+            status: 'pending_approval'
+          });
+
+          // Update gift status to pending_approval
+          await db.updateGiftOrderStatus(giftOrder.tracking_id, 'pending_approval');
+
+          // Notify the sender
+          if (giftOrder.sender_phone) {
+            try {
+              await twilioClient.messages.create({
+                body: `🦡 ${giftOrder.recipient_name || 'Your gift recipient'} just submitted a photo for their challenge! Open the Honey Badger app to review and approve it.`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: giftOrder.sender_phone
+              });
+            } catch (smsError) {
+              console.error('Failed to notify sender via SMS:', smsError.message);
+            }
+          }
+
+          // Send email notification to sender
+          if (giftOrder.sender_email) {
+            try {
+              await sendGridService.sendApprovalNotificationEmail(giftOrder.sender_email, {
+                recipientName: giftOrder.recipient_name,
+                photoUrl: photoUrl,
+                giftType: giftOrder.gift_type,
+                challengeDescription: challenge.description
+              });
+            } catch (emailError) {
+              console.error('Failed to notify sender via email:', emailError.message);
+            }
+          }
+
+          responseMessage = "🦡 Photo received! Your submission has been sent to the gift sender for approval. You'll be notified once it's reviewed!";
+          break;
         } else {
-          // Progress made but not complete
-          responseMessage = await getProgressMessage(gift, challenge);
+          // Non-photo challenge - direct completion
+          challenge.progress.currentStep++;
+          challenge.progress.submissions.push({
+            timestamp: new Date(),
+            type: hasPhoto ? 'media' : 'text',
+            data: { body: Body, mediaUrl: MediaUrl0, mediaType: MediaContentType0 }
+          });
+
+          if (challenge.progress.currentStep >= challenge.progress.totalSteps) {
+            // Challenge completed!
+            challenge.progress.completed = true;
+            await db.unlockGiftOrder(giftOrder.tracking_id);
+
+            const gift = {
+              senderName: giftOrder.sender_name || 'Someone special',
+              recipientPhone: giftOrder.recipient_phone,
+              type: giftOrder.gift_type,
+              details: { redemptionInstructions: giftOrder.personal_note || giftOrder.message }
+            };
+            responseMessage = await getCompletionMessage(gift, challenge);
+          } else {
+            const gift = { type: giftOrder.gift_type };
+            responseMessage = await getProgressMessage(gift, challenge);
+          }
+
+          // Update challenge progress in database
+          if (challenge.id && giftOrder.challenge_id) {
+            await db.updateChallengeProgress(challenge.id, challenge.progress);
+          }
+          break;
         }
-        
-        challenges.set(gift.challengeId, challenge);
-        recipients.set(From, recipient);
-        break; // Process only one challenge per message
       }
     }
 
@@ -421,33 +535,88 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
 });
 
 /**
+ * Download media from Twilio and save locally
+ */
+async function downloadTwilioMedia(mediaUrl, giftId) {
+  return new Promise((resolve, reject) => {
+    const filename = `photo-${giftId}-${Date.now()}.jpg`;
+    const filepath = path.join(uploadsDir, filename);
+    const file = fs.createWriteStream(filepath);
+
+    // Twilio media URLs require auth
+    const authString = Buffer.from(
+      `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+    ).toString('base64');
+
+    const options = {
+      headers: {
+        'Authorization': `Basic ${authString}`
+      }
+    };
+
+    const protocol = mediaUrl.startsWith('https') ? https : http;
+
+    protocol.get(mediaUrl, options, (response) => {
+      // Handle redirects
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        return downloadTwilioMedia(response.headers.location, giftId)
+          .then(resolve)
+          .catch(reject);
+      }
+
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        // Return relative URL for serving
+        const publicUrl = `/uploads/photos/${filename}`;
+        console.log('✅ Downloaded photo to:', filepath);
+        resolve(publicUrl);
+      });
+    }).on('error', (err) => {
+      fs.unlink(filepath, () => {}); // Delete incomplete file
+      console.error('❌ Failed to download media:', err.message);
+      reject(err);
+    });
+  });
+}
+
+/**
  * Get all gifts for a recipient
  * GET /api/recipients/:phone/gifts
  */
-router.get('/recipients/:phone/gifts', (req, res) => {
+router.get('/recipients/:phone/gifts', async (req, res) => {
   try {
     const { phone } = req.params;
-    const recipient = recipients.get(phone);
-    
-    if (!recipient) {
-      return res.status(404).json({
-        success: false,
-        message: 'Recipient not found'
-      });
-    }
 
-    const activeGifts = recipient.activeGifts.map(id => gifts.get(id));
-    const completedGifts = recipient.completedGifts.map(id => gifts.get(id));
+    // Get active and completed gifts from database
+    const activeGifts = await db.getActiveGiftsByRecipientPhone(phone);
+
+    // Get completed gifts
+    const sql = `
+      SELECT g.*, u.name as sender_name, u.email as sender_email
+      FROM gift_orders g
+      LEFT JOIN users u ON g.user_id = u.id
+      WHERE g.recipient_phone = ? AND g.status = 'completed'
+      ORDER BY g.created_at DESC
+    `;
+
+    const completedGifts = await new Promise((resolve, reject) => {
+      db.db.all(sql, [phone], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
+    });
 
     res.json({
       success: true,
       data: {
         recipient: {
-          phone: recipient.phone,
-          name: recipient.name
+          phone: phone,
+          name: activeGifts.length > 0 ? activeGifts[0].recipient_name : null
         },
-        activeGifts,
-        completedGifts,
+        activeGifts: activeGifts.map(formatGiftForResponse),
+        completedGifts: completedGifts.map(formatGiftForResponse),
         stats: {
           totalActive: activeGifts.length,
           totalCompleted: completedGifts.length
@@ -463,6 +632,340 @@ router.get('/recipients/:phone/gifts', (req, res) => {
     });
   }
 });
+
+/**
+ * Submit a photo for a challenge
+ * POST /api/challenges/:id/submit-photo
+ */
+router.post('/challenges/:id/submit-photo', async (req, res) => {
+  try {
+    const { id: challengeId } = req.params;
+    const { photoUrl, submitterPhone } = req.body;
+
+    if (!photoUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'Photo URL is required'
+      });
+    }
+
+    // Get challenge from database
+    const challenge = await db.getChallengeById(challengeId);
+    if (!challenge) {
+      return res.status(404).json({
+        success: false,
+        message: 'Challenge not found'
+      });
+    }
+
+    // Get gift order
+    const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
+    if (!giftOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Gift not found'
+      });
+    }
+
+    // Create photo submission
+    const submissionId = uuidv4();
+    await db.createPhotoSubmission({
+      id: submissionId,
+      challengeId,
+      giftId: challenge.gift_id,
+      photoUrl,
+      submitterPhone,
+      status: 'pending_approval'
+    });
+
+    // Update gift status
+    await db.updateGiftOrderStatus(challenge.gift_id, 'pending_approval');
+
+    res.status(201).json({
+      success: true,
+      data: {
+        submissionId,
+        status: 'pending_approval',
+        message: 'Photo submitted for approval'
+      }
+    });
+  } catch (error) {
+    console.error('Error submitting photo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit photo',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Review (approve/reject) a photo submission
+ * PUT /api/submissions/:id/review
+ */
+router.put('/submissions/:id/review', async (req, res) => {
+  try {
+    const { id: submissionId } = req.params;
+    const { action, rejectionReason } = req.body;
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Action must be "approve" or "reject"'
+      });
+    }
+
+    // Get submission from database
+    const submission = await db.getPhotoSubmissionById(submissionId);
+    if (!submission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found'
+      });
+    }
+
+    // Get gift order for notifications
+    const giftOrder = await db.getGiftOrderByTrackingId(submission.gift_id);
+
+    if (action === 'approve') {
+      // Update submission status
+      await db.updatePhotoSubmissionStatus(submissionId, 'approved');
+
+      // Unlock the gift
+      await db.unlockGiftOrder(submission.gift_id, submission.photo_url);
+
+      // Notify recipient
+      if (giftOrder && giftOrder.recipient_phone && twilioClient) {
+        try {
+          await twilioClient.messages.create({
+            body: `🎉 CONGRATULATIONS! 🎉\n\nYour photo has been approved! Your ${giftOrder.gift_type} gift is now unlocked!\n\n${giftOrder.personal_note || giftOrder.message || 'Enjoy your gift!'}`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: giftOrder.recipient_phone
+          });
+        } catch (smsError) {
+          console.error('Failed to notify recipient:', smsError.message);
+        }
+      }
+
+      // Send completion email
+      if (giftOrder && giftOrder.recipient_email) {
+        try {
+          await sendGridService.sendCompletionEmail(giftOrder.recipient_email, {
+            recipientName: giftOrder.recipient_name,
+            giftType: giftOrder.gift_type,
+            giftValue: giftOrder.gift_value,
+            senderName: giftOrder.sender_name,
+            giftId: giftOrder.tracking_id
+          });
+        } catch (emailError) {
+          console.error('Failed to send completion email:', emailError.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Photo approved and gift unlocked',
+        data: { status: 'approved', giftUnlocked: true }
+      });
+    } else {
+      // Reject submission
+      await db.updatePhotoSubmissionStatus(submissionId, 'rejected', rejectionReason);
+
+      // Update gift status back to pending
+      await db.updateGiftOrderStatus(submission.gift_id, 'pending');
+
+      // Notify recipient
+      if (giftOrder && giftOrder.recipient_phone && twilioClient) {
+        try {
+          const reason = rejectionReason ? `Reason: ${rejectionReason}` : 'Please try submitting a new photo.';
+          await twilioClient.messages.create({
+            body: `🦡 Your photo submission wasn't approved this time. ${reason}\n\nDon't give up! Send another photo to complete your challenge!`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: giftOrder.recipient_phone
+          });
+        } catch (smsError) {
+          console.error('Failed to notify recipient:', smsError.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Photo submission rejected',
+        data: { status: 'rejected', rejectionReason }
+      });
+    }
+  } catch (error) {
+    console.error('Error reviewing submission:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to review submission',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Get pending approvals for the authenticated sender
+ * GET /api/my-pending-approvals
+ * Requires auth token - user ID extracted from token
+ */
+router.get('/my-pending-approvals', async (req, res) => {
+  try {
+    // Get user ID from auth token (passed by server.js middleware)
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authorization required'
+      });
+    }
+
+    // Extract and verify JWT
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or expired token'
+      });
+    }
+
+    // Get pending approvals from database
+    const pendingApprovals = await db.getPendingApprovalsBySenderId(userId);
+
+    // Format response
+    const formattedApprovals = pendingApprovals.map(approval => ({
+      submissionId: approval.id,
+      photoUrl: approval.photo_url,
+      submittedAt: approval.submitted_at,
+      recipientName: approval.recipient_name,
+      recipientPhone: approval.recipient_phone,
+      recipientEmail: approval.recipient_email,
+      giftType: approval.gift_type,
+      giftValue: approval.gift_value,
+      giftId: approval.tracking_id,
+      challengeDescription: approval.challenge_description
+    }));
+
+    res.json({
+      success: true,
+      pendingApprovals: formattedApprovals,
+      count: formattedApprovals.length
+    });
+  } catch (error) {
+    console.error('Error getting pending approvals:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get pending approvals',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Upload a photo for a challenge submission
+ * POST /api/challenges/:id/upload-photo
+ * Multipart form data with 'photo' field
+ */
+const upload = require('../../config/multerConfig');
+
+router.post('/challenges/:id/upload-photo', upload.single('photo'), async (req, res) => {
+  try {
+    const { id: challengeId } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No photo file provided'
+      });
+    }
+
+    // Get challenge from database
+    const challenge = await db.getChallengeById(challengeId);
+    if (!challenge) {
+      return res.status(404).json({
+        success: false,
+        message: 'Challenge not found'
+      });
+    }
+
+    // Get gift order
+    const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
+    if (!giftOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Gift not found'
+      });
+    }
+
+    // Create photo URL
+    const photoUrl = `/uploads/photos/${req.file.filename}`;
+
+    // Create photo submission
+    const submissionId = uuidv4();
+    await db.createPhotoSubmission({
+      id: submissionId,
+      challengeId,
+      giftId: challenge.gift_id,
+      photoUrl,
+      submitterPhone: req.body.submitterPhone || null,
+      status: 'pending_approval'
+    });
+
+    // Update gift status
+    await db.updateGiftOrderStatus(challenge.gift_id, 'pending_approval');
+
+    // Notify sender
+    if (giftOrder.sender_email) {
+      await sendGridService.sendApprovalNotificationEmail(giftOrder.sender_email, {
+        recipientName: giftOrder.recipient_name,
+        photoUrl: photoUrl,
+        giftType: giftOrder.gift_type,
+        challengeDescription: challenge.description
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        submissionId,
+        photoUrl,
+        status: 'pending_approval',
+        message: 'Photo uploaded and submitted for approval'
+      }
+    });
+  } catch (error) {
+    console.error('Error uploading photo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload photo',
+      error: error.message
+    });
+  }
+});
+
+// Helper function to format gift order for response
+function formatGiftForResponse(giftOrder) {
+  return {
+    id: giftOrder.tracking_id,
+    senderName: giftOrder.sender_name,
+    recipientName: giftOrder.recipient_name,
+    recipientPhone: giftOrder.recipient_phone,
+    recipientEmail: giftOrder.recipient_email,
+    type: giftOrder.gift_type,
+    value: giftOrder.gift_value,
+    challenge: giftOrder.challenge_description || giftOrder.challenge,
+    status: giftOrder.status,
+    unlocked: giftOrder.unlocked,
+    createdAt: giftOrder.created_at
+  };
+}
 
 // Helper functions
 

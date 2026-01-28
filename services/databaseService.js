@@ -133,6 +133,49 @@ class DatabaseService {
             else console.log('✅ Special dates table ready');
         });
 
+        // Challenges table (for gift unlock challenges)
+        const createChallengesTable = `
+            CREATE TABLE IF NOT EXISTS challenges (
+                id TEXT PRIMARY KEY,
+                gift_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                description TEXT,
+                requirements TEXT,
+                progress TEXT,
+                reminder_frequency TEXT,
+                last_reminder_sent DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (gift_id) REFERENCES gift_orders(tracking_id)
+            )
+        `;
+
+        // Photo submissions table (for challenge verification)
+        const createPhotoSubmissionsTable = `
+            CREATE TABLE IF NOT EXISTS photo_submissions (
+                id TEXT PRIMARY KEY,
+                challenge_id TEXT NOT NULL,
+                gift_id TEXT NOT NULL,
+                photo_url TEXT NOT NULL,
+                submitter_phone TEXT,
+                status TEXT DEFAULT 'pending_approval',
+                rejection_reason TEXT,
+                submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at DATETIME,
+                FOREIGN KEY (challenge_id) REFERENCES challenges(id),
+                FOREIGN KEY (gift_id) REFERENCES gift_orders(tracking_id)
+            )
+        `;
+
+        this.db.run(createChallengesTable, (err) => {
+            if (err) console.error('Error creating challenges table:', err.message);
+            else console.log('✅ Challenges table ready');
+        });
+
+        this.db.run(createPhotoSubmissionsTable, (err) => {
+            if (err) console.error('Error creating photo_submissions table:', err.message);
+            else console.log('✅ Photo submissions table ready');
+        });
+
         // Run migrations to update existing tables
         this.runMigrations();
     }
@@ -191,7 +234,55 @@ class DatabaseService {
                     });
                 }
             });
+
+            // Additional columns for photo unlock workflow
+            const photoWorkflowColumns = [
+                { name: 'challenge_id', type: 'TEXT' },
+                { name: 'unlocked', type: 'BOOLEAN DEFAULT 0' },
+                { name: 'photo_submission_url', type: 'TEXT' },
+                { name: 'unlocked_at', type: 'DATETIME' }
+            ];
+
+            photoWorkflowColumns.forEach(column => {
+                const exists = columns && columns.some(col => col.name === column.name);
+                if (!exists) {
+                    console.log(`📝 Running migration: Adding ${column.name} column to gift_orders table`);
+                    this.db.run(`ALTER TABLE gift_orders ADD COLUMN ${column.name} ${column.type}`, (err) => {
+                        if (err) {
+                            console.error(`❌ Migration failed for ${column.name}:`, err.message);
+                        } else {
+                            console.log(`✅ Migration successful: ${column.name} column added`);
+                        }
+                    });
+                }
+            });
         });
+
+        // Create database indexes for performance
+        this.createIndexes();
+    }
+
+    createIndexes() {
+        const indexes = [
+            'CREATE INDEX IF NOT EXISTS idx_gift_orders_user_id ON gift_orders(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_gift_orders_recipient_email ON gift_orders(recipient_email)',
+            'CREATE INDEX IF NOT EXISTS idx_gift_orders_recipient_phone ON gift_orders(recipient_phone)',
+            'CREATE INDEX IF NOT EXISTS idx_gift_orders_status ON gift_orders(status)',
+            'CREATE INDEX IF NOT EXISTS idx_gift_orders_tracking_id ON gift_orders(tracking_id)',
+            'CREATE INDEX IF NOT EXISTS idx_challenges_gift_id ON challenges(gift_id)',
+            'CREATE INDEX IF NOT EXISTS idx_photo_submissions_challenge_id ON photo_submissions(challenge_id)',
+            'CREATE INDEX IF NOT EXISTS idx_photo_submissions_gift_id ON photo_submissions(gift_id)',
+            'CREATE INDEX IF NOT EXISTS idx_photo_submissions_status ON photo_submissions(status)'
+        ];
+
+        indexes.forEach(indexSql => {
+            this.db.run(indexSql, (err) => {
+                if (err) {
+                    console.error('❌ Index creation failed:', err.message);
+                }
+            });
+        });
+        console.log('✅ Database indexes created');
     }
 
     // User management methods
@@ -290,6 +381,70 @@ class DatabaseService {
                     }
                 });
             });
+        });
+    }
+
+    async updateUserProfile(userId, profileData) {
+        const { name } = profileData;
+
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+
+            this.db.run(sql, [name, userId], function(err) {
+                if (err) {
+                    reject(new Error('Profile update failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    async changePasswordById(userId, currentPassword, newPassword) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                // First get the user to verify current password
+                const sql = `SELECT password FROM users WHERE id = ? AND is_active = 1`;
+
+                this.db.get(sql, [userId], async (err, row) => {
+                    if (err) {
+                        reject(new Error('Database error: ' + err.message));
+                        return;
+                    }
+
+                    if (!row) {
+                        reject(new Error('User not found'));
+                        return;
+                    }
+
+                    // Verify current password
+                    const isValid = await bcrypt.compare(currentPassword, row.password);
+                    if (!isValid) {
+                        reject(new Error('Current password is incorrect'));
+                        return;
+                    }
+
+                    // Hash the new password
+                    bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
+                        if (err) {
+                            reject(new Error('Password hashing failed'));
+                            return;
+                        }
+
+                        const updateSql = `UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+
+                        this.db.run(updateSql, [hashedPassword, userId], function(err) {
+                            if (err) {
+                                reject(new Error('Password update failed: ' + err.message));
+                            } else {
+                                resolve(this.changes > 0);
+                            }
+                        });
+                    });
+                });
+            } catch (error) {
+                reject(error);
+            }
         });
     }
 
@@ -410,14 +565,34 @@ class DatabaseService {
     async getUserOrders(userId) {
         return new Promise((resolve, reject) => {
             const sql = `
-                SELECT * FROM gift_orders 
-                WHERE user_id = ? 
+                SELECT * FROM gift_orders
+                WHERE user_id = ?
                 ORDER BY created_at DESC
             `;
-            
+
             this.db.all(sql, [userId], (err, rows) => {
                 if (err) {
                     reject(new Error('Orders lookup failed: ' + err.message));
+                } else {
+                    resolve(rows);
+                }
+            });
+        });
+    }
+
+    async getReceivedGifts(userEmail, userPhone) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT g.*, u.name as sender_name, u.email as sender_email
+                FROM gift_orders g
+                LEFT JOIN users u ON g.user_id = u.id
+                WHERE g.recipient_email = ? OR g.recipient_phone = ?
+                ORDER BY g.created_at DESC
+            `;
+
+            this.db.all(sql, [userEmail, userPhone], (err, rows) => {
+                if (err) {
+                    reject(new Error('Received gifts lookup failed: ' + err.message));
                 } else {
                     resolve(rows);
                 }
@@ -570,6 +745,301 @@ class DatabaseService {
                     reject(new Error('Contact verification failed: ' + err.message));
                 } else {
                     resolve(!!row);
+                }
+            });
+        });
+    }
+
+    // Challenge management methods
+    async createChallenge(challengeData) {
+        const { id, giftId, type, description, requirements, progress, reminderFrequency } = challengeData;
+
+        return new Promise((resolve, reject) => {
+            const sql = `
+                INSERT INTO challenges (id, gift_id, type, description, requirements, progress, reminder_frequency)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `;
+
+            this.db.run(sql, [
+                id,
+                giftId,
+                type,
+                description,
+                JSON.stringify(requirements || {}),
+                JSON.stringify(progress || { started: false, completed: false, currentStep: 0, totalSteps: 1, submissions: [] }),
+                reminderFrequency || 'daily'
+            ], function(err) {
+                if (err) {
+                    reject(new Error('Challenge creation failed: ' + err.message));
+                } else {
+                    resolve({ id, giftId, type, description });
+                }
+            });
+        });
+    }
+
+    async getChallengeById(challengeId) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT * FROM challenges WHERE id = ?`;
+
+            this.db.get(sql, [challengeId], (err, row) => {
+                if (err) {
+                    reject(new Error('Challenge lookup failed: ' + err.message));
+                } else if (row) {
+                    row.requirements = JSON.parse(row.requirements || '{}');
+                    row.progress = JSON.parse(row.progress || '{}');
+                    resolve(row);
+                } else {
+                    resolve(null);
+                }
+            });
+        });
+    }
+
+    async getChallengeByGiftId(giftId) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT * FROM challenges WHERE gift_id = ?`;
+
+            this.db.get(sql, [giftId], (err, row) => {
+                if (err) {
+                    reject(new Error('Challenge lookup failed: ' + err.message));
+                } else if (row) {
+                    row.requirements = JSON.parse(row.requirements || '{}');
+                    row.progress = JSON.parse(row.progress || '{}');
+                    resolve(row);
+                } else {
+                    resolve(null);
+                }
+            });
+        });
+    }
+
+    async updateChallengeProgress(challengeId, progress) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE challenges SET progress = ? WHERE id = ?`;
+
+            this.db.run(sql, [JSON.stringify(progress), challengeId], function(err) {
+                if (err) {
+                    reject(new Error('Challenge update failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    async updateChallengeReminderSent(challengeId) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE challenges SET last_reminder_sent = CURRENT_TIMESTAMP WHERE id = ?`;
+
+            this.db.run(sql, [challengeId], function(err) {
+                if (err) {
+                    reject(new Error('Challenge reminder update failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    // Photo submission methods
+    async createPhotoSubmission(submissionData) {
+        const { id, challengeId, giftId, photoUrl, submitterPhone, status } = submissionData;
+
+        return new Promise((resolve, reject) => {
+            const sql = `
+                INSERT INTO photo_submissions (id, challenge_id, gift_id, photo_url, submitter_phone, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `;
+
+            this.db.run(sql, [
+                id,
+                challengeId,
+                giftId,
+                photoUrl,
+                submitterPhone || null,
+                status || 'pending_approval'
+            ], function(err) {
+                if (err) {
+                    reject(new Error('Photo submission creation failed: ' + err.message));
+                } else {
+                    resolve({ id, challengeId, giftId, photoUrl, status: status || 'pending_approval' });
+                }
+            });
+        });
+    }
+
+    async getPhotoSubmissionById(submissionId) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT * FROM photo_submissions WHERE id = ?`;
+
+            this.db.get(sql, [submissionId], (err, row) => {
+                if (err) {
+                    reject(new Error('Photo submission lookup failed: ' + err.message));
+                } else {
+                    resolve(row);
+                }
+            });
+        });
+    }
+
+    async getPhotoSubmissionsByGiftId(giftId) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT * FROM photo_submissions WHERE gift_id = ? ORDER BY submitted_at DESC`;
+
+            this.db.all(sql, [giftId], (err, rows) => {
+                if (err) {
+                    reject(new Error('Photo submissions lookup failed: ' + err.message));
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    async getPendingApprovalsBySenderId(userId) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT ps.*, g.recipient_name, g.recipient_email, g.recipient_phone,
+                       g.gift_type, g.gift_value, g.tracking_id, c.description as challenge_description
+                FROM photo_submissions ps
+                JOIN gift_orders g ON ps.gift_id = g.tracking_id
+                JOIN challenges c ON ps.challenge_id = c.id
+                WHERE g.user_id = ? AND ps.status = 'pending_approval'
+                ORDER BY ps.submitted_at DESC
+            `;
+
+            this.db.all(sql, [userId], (err, rows) => {
+                if (err) {
+                    reject(new Error('Pending approvals lookup failed: ' + err.message));
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    async updatePhotoSubmissionStatus(submissionId, status, rejectionReason = null) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                UPDATE photo_submissions
+                SET status = ?, rejection_reason = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `;
+
+            this.db.run(sql, [status, rejectionReason, submissionId], function(err) {
+                if (err) {
+                    reject(new Error('Photo submission update failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    // Gift order updates for unlock workflow
+    async updateGiftOrderStatus(trackingId, status) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE gift_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE tracking_id = ?`;
+
+            this.db.run(sql, [status, trackingId], function(err) {
+                if (err) {
+                    reject(new Error('Gift order status update failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    async unlockGiftOrder(trackingId, photoSubmissionUrl = null) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                UPDATE gift_orders
+                SET status = 'completed', unlocked = 1, unlocked_at = CURRENT_TIMESTAMP,
+                    photo_submission_url = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE tracking_id = ?
+            `;
+
+            this.db.run(sql, [photoSubmissionUrl, trackingId], function(err) {
+                if (err) {
+                    reject(new Error('Gift order unlock failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    async getGiftOrderByTrackingId(trackingId) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT g.*, u.name as sender_name, u.email as sender_email, u.phone as sender_phone
+                FROM gift_orders g
+                LEFT JOIN users u ON g.user_id = u.id
+                WHERE g.tracking_id = ?
+            `;
+
+            this.db.get(sql, [trackingId], (err, row) => {
+                if (err) {
+                    reject(new Error('Gift order lookup failed: ' + err.message));
+                } else {
+                    resolve(row);
+                }
+            });
+        });
+    }
+
+    async getGiftOrderByRecipientPhone(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT g.*, u.name as sender_name, u.email as sender_email, u.phone as sender_phone
+                FROM gift_orders g
+                LEFT JOIN users u ON g.user_id = u.id
+                WHERE g.recipient_phone = ? AND g.status != 'completed'
+                ORDER BY g.created_at DESC
+                LIMIT 1
+            `;
+
+            this.db.get(sql, [phone], (err, row) => {
+                if (err) {
+                    reject(new Error('Gift order lookup failed: ' + err.message));
+                } else {
+                    resolve(row);
+                }
+            });
+        });
+    }
+
+    async getActiveGiftsByRecipientPhone(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT g.*, u.name as sender_name, u.email as sender_email
+                FROM gift_orders g
+                LEFT JOIN users u ON g.user_id = u.id
+                WHERE g.recipient_phone = ? AND g.status != 'completed'
+                ORDER BY g.created_at DESC
+            `;
+
+            this.db.all(sql, [phone], (err, rows) => {
+                if (err) {
+                    reject(new Error('Active gifts lookup failed: ' + err.message));
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    async linkChallengeToGiftOrder(trackingId, challengeId) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE gift_orders SET challenge_id = ? WHERE tracking_id = ?`;
+
+            this.db.run(sql, [challengeId, trackingId], function(err) {
+                if (err) {
+                    reject(new Error('Challenge link failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
                 }
             });
         });
