@@ -584,10 +584,57 @@ async function downloadTwilioMedia(mediaUrl, giftId) {
 /**
  * Get all gifts for a recipient
  * GET /api/recipients/:phone/gifts
+ * Requires authentication - user's phone must match the requested phone
  */
 router.get('/recipients/:phone/gifts', async (req, res) => {
   try {
     const { phone } = req.params;
+
+    // Require authentication
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authorization required'
+      });
+    }
+
+    // Extract and verify JWT
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or expired token'
+      });
+    }
+
+    // Get the authenticated user to verify phone ownership
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Verify the user's phone matches the requested phone (normalize for comparison)
+    const normalizePhone = (p) => p ? p.replace(/[^0-9+]/g, '') : '';
+    const userPhone = normalizePhone(user.phone);
+    const requestedPhone = normalizePhone(phone);
+
+    if (!userPhone || userPhone !== requestedPhone) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only access gifts for your own phone number'
+      });
+    }
 
     // Get active and completed gifts from database
     const activeGifts = await db.getActiveGiftsByRecipientPhone(phone);

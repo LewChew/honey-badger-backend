@@ -79,6 +79,9 @@ app.use(express.urlencoded({ extended: true }));
 // Serve uploaded files (photos)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Serve static files from public directory (consent pages, legal docs, etc.)
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -1156,7 +1159,8 @@ app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
             });
         }
 
-        const receivedGifts = await db.getReceivedGifts(user.email, user.phone);
+        // Pass userId to exclude self-sent gifts from received gifts
+        const receivedGifts = await db.getReceivedGifts(user.email, user.phone, req.user.id);
 
         // Format gifts for frontend
         const formattedGifts = receivedGifts.map(gift => ({

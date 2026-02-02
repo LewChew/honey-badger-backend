@@ -580,17 +580,19 @@ class DatabaseService {
         });
     }
 
-    async getReceivedGifts(userEmail, userPhone) {
+    async getReceivedGifts(userEmail, userPhone, userId = null) {
         return new Promise((resolve, reject) => {
+            // Exclude gifts sent by the requesting user (self-sent gifts)
             const sql = `
                 SELECT g.*, u.name as sender_name, u.email as sender_email
                 FROM gift_orders g
                 LEFT JOIN users u ON g.user_id = u.id
-                WHERE g.recipient_email = ? OR g.recipient_phone = ?
+                WHERE (g.recipient_email = ? OR g.recipient_phone = ?)
+                  AND (? IS NULL OR g.user_id != ?)
                 ORDER BY g.created_at DESC
             `;
 
-            this.db.all(sql, [userEmail, userPhone], (err, rows) => {
+            this.db.all(sql, [userEmail, userPhone, userId, userId], (err, rows) => {
                 if (err) {
                     reject(new Error('Received gifts lookup failed: ' + err.message));
                 } else {
