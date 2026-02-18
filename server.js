@@ -82,6 +82,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Serve static files from public directory (consent pages, legal docs, etc.)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// SMS terms/consent page
+app.get('/sms-terms', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'sms-consent.html'));
+});
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
