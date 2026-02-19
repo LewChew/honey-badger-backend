@@ -24,6 +24,9 @@ if (process.env.ENABLE_SMS === 'true') {
         console.warn('⚠️ Warning: Missing Twilio environment variables:', missingVars.join(', '));
         console.warn('   SMS functionality will be disabled.');
         process.env.ENABLE_SMS = 'false';
+    } else if (!process.env.TWILIO_ACCOUNT_SID.startsWith('AC')) {
+        console.warn('⚠️ Warning: TWILIO_ACCOUNT_SID must start with "AC". SMS functionality will be disabled.');
+        process.env.ENABLE_SMS = 'false';
     }
 }
 

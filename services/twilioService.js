@@ -2,18 +2,23 @@ const twilio = require('twilio');
 
 class TwilioService {
     constructor() {
-        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
-            console.warn('⚠️  Twilio credentials not found. SMS functionality will be disabled.');
+        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_ACCOUNT_SID.startsWith('AC')) {
+            console.warn('⚠️  Twilio credentials not found or invalid. SMS functionality will be disabled.');
             this.client = null;
             return;
         }
 
-        this.client = twilio(
-            process.env.TWILIO_ACCOUNT_SID,
-            process.env.TWILIO_AUTH_TOKEN
-        );
-        this.phoneNumber = process.env.TWILIO_PHONE_NUMBER;
-        console.log('✅ Twilio service initialized');
+        try {
+            this.client = twilio(
+                process.env.TWILIO_ACCOUNT_SID,
+                process.env.TWILIO_AUTH_TOKEN
+            );
+            this.phoneNumber = process.env.TWILIO_PHONE_NUMBER;
+            console.log('✅ Twilio service initialized');
+        } catch (error) {
+            console.error('❌ Failed to initialize Twilio service:', error.message);
+            this.client = null;
+        }
     }
 
     /**

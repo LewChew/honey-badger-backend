@@ -11,7 +11,7 @@ const http = require('http');
 
 // Initialize Twilio client (conditional)
 let twilioClient = null;
-if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_ACCOUNT_SID.startsWith('AC')) {
   try {
     twilioClient = twilio(
       process.env.TWILIO_ACCOUNT_SID,
