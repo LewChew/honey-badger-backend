@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -10,7 +11,6 @@ const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./services/databaseService');
 const sendGridService = require('./services/sendGridService');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
