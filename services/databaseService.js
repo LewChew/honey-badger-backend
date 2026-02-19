@@ -176,6 +176,23 @@ class DatabaseService {
             else console.log('✅ Photo submissions table ready');
         });
 
+        // Password reset tokens table
+        const createResetTokensTable = `
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used BOOLEAN DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `;
+
+        this.db.run(createResetTokensTable, (err) => {
+            if (err) console.error('Error creating password_reset_tokens table:', err.message);
+            else console.log('✅ Password reset tokens table ready');
+        });
+
         // Run migrations to update existing tables
         this.runMigrations();
     }
@@ -272,7 +289,9 @@ class DatabaseService {
             'CREATE INDEX IF NOT EXISTS idx_challenges_gift_id ON challenges(gift_id)',
             'CREATE INDEX IF NOT EXISTS idx_photo_submissions_challenge_id ON photo_submissions(challenge_id)',
             'CREATE INDEX IF NOT EXISTS idx_photo_submissions_gift_id ON photo_submissions(gift_id)',
-            'CREATE INDEX IF NOT EXISTS idx_photo_submissions_status ON photo_submissions(status)'
+            'CREATE INDEX IF NOT EXISTS idx_photo_submissions_status ON photo_submissions(status)',
+            'CREATE INDEX IF NOT EXISTS idx_reset_tokens_token ON password_reset_tokens(token)',
+            'CREATE INDEX IF NOT EXISTS idx_reset_tokens_email ON password_reset_tokens(email)'
         ];
 
         indexes.forEach(indexSql => {
@@ -380,6 +399,57 @@ class DatabaseService {
                         resolve(this.changes > 0);
                     }
                 });
+            });
+        });
+    }
+
+    async saveResetToken(email, token, expiresAt) {
+        return new Promise((resolve, reject) => {
+            // Delete any prior unused tokens for this email
+            const deleteSql = `DELETE FROM password_reset_tokens WHERE email = ? AND used = 0`;
+            this.db.run(deleteSql, [email], (err) => {
+                if (err) {
+                    reject(new Error('Failed to clear old reset tokens: ' + err.message));
+                    return;
+                }
+
+                const insertSql = `INSERT INTO password_reset_tokens (email, token, expires_at) VALUES (?, ?, ?)`;
+                this.db.run(insertSql, [email, token, expiresAt], function(err) {
+                    if (err) {
+                        reject(new Error('Failed to save reset token: ' + err.message));
+                    } else {
+                        resolve(this.lastID);
+                    }
+                });
+            });
+        });
+    }
+
+    async getResetToken(token) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT * FROM password_reset_tokens
+                WHERE token = ? AND used = 0 AND expires_at > datetime('now')
+            `;
+            this.db.get(sql, [token], (err, row) => {
+                if (err) {
+                    reject(new Error('Reset token lookup failed: ' + err.message));
+                } else {
+                    resolve(row);
+                }
+            });
+        });
+    }
+
+    async markResetTokenUsed(token) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE password_reset_tokens SET used = 1 WHERE token = ?`;
+            this.db.run(sql, [token], function(err) {
+                if (err) {
+                    reject(new Error('Failed to mark reset token as used: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
             });
         });
     }

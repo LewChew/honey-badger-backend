@@ -197,6 +197,106 @@ class SendGridService {
         }
     }
 
+    async sendPasswordResetEmail(recipientEmail, resetData) {
+        if (!this.initialized) {
+            console.log('SendGrid not initialized, skipping password reset email');
+            return { success: false, message: 'SendGrid not configured' };
+        }
+
+        try {
+            const msg = {
+                to: recipientEmail,
+                from: {
+                    email: this.fromEmail,
+                    name: this.fromName
+                },
+                subject: 'Reset Your Honey Badger Password',
+                text: this.createPasswordResetEmailText(resetData),
+                html: this.createPasswordResetEmailHtml(resetData)
+            };
+
+            const result = await this.sendWithRetry(msg);
+            console.log(`✅ Password reset email sent to ${recipientEmail}`);
+            return result;
+        } catch (error) {
+            console.error('❌ Failed to send password reset email:', error.message);
+            if (error.response) {
+                console.error('SendGrid error details:', error.response.body);
+            }
+            return { success: false, message: error.message };
+        }
+    }
+
+    createPasswordResetEmailText(resetData) {
+        const { resetUrl, expiresInMinutes } = resetData;
+
+        return `
+You requested a password reset for your Honey Badger account.
+
+Click the link below to reset your password:
+${resetUrl}
+
+This link will expire in ${expiresInMinutes} minutes.
+
+If you didn't request this, you can safely ignore this email.
+
+Best regards,
+The Honey Badger Team
+        `.trim();
+    }
+
+    createPasswordResetEmailHtml(resetData) {
+        const { resetUrl, expiresInMinutes } = resetData;
+
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 20px auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #1a1a1a 0%, #0d0d0d 100%); color: #E2FF00; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 28px; }
+        .content { padding: 30px; }
+        .button { display: inline-block; background: #E2FF00; color: #1a1a1a; padding: 14px 36px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px; margin: 20px 0; }
+        .warning-box { background: #fff9e6; border: 1px solid #E2FF00; padding: 15px; margin: 20px 0; border-radius: 5px; font-size: 14px; }
+        .link-fallback { word-break: break-all; font-size: 13px; color: #666; margin-top: 10px; }
+        .footer { background: #f4f4f4; padding: 20px; text-align: center; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Password Reset</h1>
+        </div>
+        <div class="content">
+            <h2>Reset Your Password</h2>
+            <p>We received a request to reset the password for your Honey Badger account.</p>
+            <p>Click the button below to set a new password:</p>
+
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="${resetUrl}" class="button">Reset Password</a>
+            </div>
+
+            <div class="warning-box">
+                <strong>This link will expire in ${expiresInMinutes} minutes.</strong>
+                <br>If you didn't request a password reset, you can safely ignore this email.
+            </div>
+
+            <p class="link-fallback">If the button doesn't work, copy and paste this link into your browser:<br>${resetUrl}</p>
+        </div>
+        <div class="footer">
+            <p>Best regards,<br>The Honey Badger Team</p>
+            <p style="margin-top: 20px;">Honey Badger AI Gifts - Motivation meets rewards</p>
+        </div>
+    </div>
+</body>
+</html>
+        `.trim();
+    }
+
     createApprovalNotificationText(submissionData) {
         const { recipientName, giftType, challengeDescription, photoUrl } = submissionData;
 

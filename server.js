@@ -6,8 +6,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const cron = require('node-cron');
+const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./services/databaseService');
+const sendGridService = require('./services/sendGridService');
 require('dotenv').config();
 
 const app = express();
@@ -47,10 +49,6 @@ if (!db || !db.db) {
     console.error('   Make sure sqlite3 is installed: npm install');
     process.exit(1);
 }
-
-// In-memory password reset tokens (temporary storage for password resets)
-// Structure: { token: { email, expiresAt } }
-const resetTokens = new Map();
 
 // JWT secret (use environment variable in production)
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
@@ -851,32 +849,46 @@ app.post('/api/auth/forgot-password', [
             // This prevents email enumeration attacks
             return res.json({
                 success: true,
-                message: 'If an account exists with that email, a reset token has been generated. Check the console for the token.'
+                message: 'If an account exists with that email, a password reset link has been sent.'
             });
         }
 
-        // Generate reset token (6-digit code for simplicity)
-        const resetToken = Math.floor(100000 + Math.random() * 900000).toString();
+        // Generate secure reset token (64-char hex string)
+        const resetToken = crypto.randomBytes(32).toString('hex');
 
         // Store token with 15-minute expiration
-        const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes
-        resetTokens.set(resetToken, {
-            email: email,
-            expiresAt: expiresAt
+        const expiresInMinutes = 15;
+        const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString();
+        await db.saveResetToken(email, resetToken, expiresAt);
+
+        // Build reset URL
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+
+        // Send reset email via SendGrid
+        const emailResult = await sendGridService.sendPasswordResetEmail(email, {
+            resetUrl,
+            expiresInMinutes
         });
 
-        // In production, send this via email
-        // For now, log it to console
+        if (emailResult.success) {
+            console.log(`✅ Password reset email sent to ${email}`);
+        } else {
+            console.warn(`⚠️  Password reset email failed for ${email}: ${emailResult.message}`);
+        }
+
+        // Log token to console for development
         console.log('🔐 Password Reset Token Generated');
         console.log('================================');
         console.log(`Email: ${email}`);
         console.log(`Token: ${resetToken}`);
-        console.log(`Expires: ${new Date(expiresAt).toLocaleString()}`);
+        console.log(`Reset URL: ${resetUrl}`);
+        console.log(`Expires: ${expiresAt}`);
         console.log('================================');
 
         res.json({
             success: true,
-            message: 'Reset token generated! Check the server console for your token.',
+            message: 'If an account exists with that email, a password reset link has been sent.',
             // In development, include the token in response
             ...(process.env.NODE_ENV === 'development' && { token: resetToken })
         });
@@ -908,8 +920,8 @@ app.post('/api/auth/reset-password', [
 
         const { token, newPassword } = req.body;
 
-        // Check if token exists
-        const resetData = resetTokens.get(token);
+        // Look up token in database (handles expiry + used check in SQL)
+        const resetData = await db.getResetToken(token);
         if (!resetData) {
             return res.status(400).json({
                 success: false,
@@ -917,37 +929,17 @@ app.post('/api/auth/reset-password', [
             });
         }
 
-        // Check if token has expired
-        if (Date.now() > resetData.expiresAt) {
-            resetTokens.delete(token);
-            return res.status(400).json({
-                success: false,
-                message: 'Reset token has expired. Please request a new one.'
-            });
-        }
-
-        // Get user
-        const user = await db.getUserByEmail(resetData.email);
-        if (!user) {
-            resetTokens.delete(token);
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
         // Update user password
         const passwordUpdated = await db.updatePassword(resetData.email, newPassword);
         if (!passwordUpdated) {
-            resetTokens.delete(token);
             return res.status(500).json({
                 success: false,
                 message: 'Failed to update password'
             });
         }
 
-        // Delete used token
-        resetTokens.delete(token);
+        // Mark token as used (preserves audit trail)
+        await db.markResetTokenUsed(token);
 
         console.log('✅ Password reset successful for:', resetData.email);
 
