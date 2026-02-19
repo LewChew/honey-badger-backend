@@ -257,7 +257,8 @@ class DatabaseService {
                 { name: 'challenge_id', type: 'TEXT' },
                 { name: 'unlocked', type: 'BOOLEAN DEFAULT 0' },
                 { name: 'photo_submission_url', type: 'TEXT' },
-                { name: 'unlocked_at', type: 'DATETIME' }
+                { name: 'unlocked_at', type: 'DATETIME' },
+                { name: 'card_image_url', type: 'TEXT' }
             ];
 
             photoWorkflowColumns.forEach(column => {
@@ -585,7 +586,8 @@ class DatabaseService {
             personalNote,
             message,
             duration,
-            notifyOnComplete
+            notifyOnComplete,
+            cardImageUrl
         } = orderData;
 
         return new Promise((resolve, reject) => {
@@ -594,9 +596,10 @@ class DatabaseService {
                     user_id, tracking_id, recipient_name, recipient_contact, recipient_email,
                     recipient_phone, delivery_method, gift_type, gift_value, challenge,
                     challenge_type, challenge_description, verification_type,
-                    reminder_frequency, personal_note, message, duration, notify_on_complete
+                    reminder_frequency, personal_note, message, duration, notify_on_complete,
+                    card_image_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             this.db.run(sql, [
@@ -617,7 +620,8 @@ class DatabaseService {
                 personalNote || message || null,
                 message || personalNote || null,
                 duration || null,
-                notifyOnComplete !== undefined ? notifyOnComplete : 1
+                notifyOnComplete !== undefined ? notifyOnComplete : 1,
+                cardImageUrl || null
             ], function(err) {
                 if (err) {
                     reject(new Error('Gift order creation failed: ' + err.message));

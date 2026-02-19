@@ -981,7 +981,8 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
         challenge, // Legacy field
         personalNote,
         message, // Legacy field
-        duration
+        duration,
+        cardImageUrl
     } = req.body;
 
     // Use giftAmount if giftValue is not provided (for iOS app compatibility)
@@ -1037,7 +1038,8 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
                         challengeType: challengeType || 'custom',
                         challengeDescription: challengeDescription || challenge,
                         personalNote: personalNote || message,
-                        duration: duration || 1
+                        duration: duration || 1,
+                        cardImageUrl: cardImageUrl || null
                     });
                     console.log('✅ Gift saved to database with tracking ID:', trackingId);
                 } catch (dbError) {
@@ -1090,7 +1092,8 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
             personalNote: personalNote || message || '',
             message: message || personalNote || '',
             duration: duration || 1,
-            notifyOnComplete: req.body.notifyOnComplete !== undefined ? req.body.notifyOnComplete : true
+            notifyOnComplete: req.body.notifyOnComplete !== undefined ? req.body.notifyOnComplete : true,
+            cardImageUrl: cardImageUrl || null
         };
 
         await db.createGiftOrder(req.user.id, orderData);
@@ -1136,7 +1139,8 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             duration: order.duration,
             reminderFrequency: order.reminder_frequency,
             personalNote: order.personal_note,
-            message: order.message
+            message: order.message,
+            cardImageUrl: order.card_image_url
         }));
 
         res.json({
@@ -1187,7 +1191,8 @@ app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
             duration: gift.duration,
             reminderFrequency: gift.reminder_frequency,
             personalNote: gift.personal_note,
-            message: gift.message
+            message: gift.message,
+            cardImageUrl: gift.card_image_url
         }));
 
         res.json({
