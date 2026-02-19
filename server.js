@@ -88,6 +88,11 @@ app.get('/sms-terms', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'sms-consent.html'));
 });
 
+// Password reset page
+app.get('/reset-password', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
+});
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -865,8 +870,8 @@ app.post('/api/auth/forgot-password', [
         await db.saveResetToken(email, resetToken, expiresAt);
 
         // Build reset URL
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+        const backendUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
+        const resetUrl = `${backendUrl}/reset-password?token=${resetToken}`;
 
         // Send reset email via SendGrid
         const emailResult = await sendGridService.sendPasswordResetEmail(email, {
