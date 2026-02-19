@@ -997,6 +997,134 @@ router.post('/challenges/:id/upload-photo', upload.single('photo'), async (req, 
   }
 });
 
+/**
+ * Submit a challenge photo for a received gift
+ * POST /api/gifts/:trackingId/submit-challenge
+ * Multipart form data with 'photo' field
+ * Requires auth token - matches user to gift recipient
+ */
+router.post('/gifts/:trackingId/submit-challenge', upload.single('photo'), async (req, res) => {
+  try {
+    // Verify JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Validate photo
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No photo file provided' });
+    }
+
+    const { trackingId } = req.params;
+
+    // Get gift order
+    const giftOrder = await db.getGiftOrderByTrackingId(trackingId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+
+    // Verify the authenticated user is the recipient
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const userEmail = (user.email || '').toLowerCase();
+    const userPhone = (user.phone || '').replace(/\D/g, '');
+    const recipientEmail = (giftOrder.recipient_email || '').toLowerCase();
+    const recipientPhone = (giftOrder.recipient_phone || '').replace(/\D/g, '');
+
+    const isRecipient = (userEmail && recipientEmail && userEmail === recipientEmail) ||
+                        (userPhone && recipientPhone && userPhone.endsWith(recipientPhone.slice(-10)));
+
+    if (!isRecipient) {
+      return res.status(403).json({ success: false, message: 'You are not the recipient of this gift' });
+    }
+
+    // Resolve challenge ID (from gift_orders or fallback to challenges table)
+    let challengeId = giftOrder.challenge_id;
+    if (!challengeId) {
+      const challenge = await db.getChallengeByGiftId(trackingId);
+      if (challenge) {
+        challengeId = challenge.id;
+        // Back-fill the link for future lookups
+        await db.linkChallengeToGiftOrder(trackingId, challengeId);
+      } else {
+        // Create a challenge record for legacy gifts
+        challengeId = 'CH' + Date.now();
+        await db.createChallenge({
+          id: challengeId,
+          giftId: trackingId,
+          type: giftOrder.challenge_type || 'custom',
+          description: giftOrder.challenge_description || giftOrder.challenge || '',
+          requirements: { totalSteps: giftOrder.duration || 1 }
+        });
+        await db.linkChallengeToGiftOrder(trackingId, challengeId);
+      }
+    }
+
+    // Create photo submission
+    const photoUrl = `/uploads/photos/${req.file.filename}`;
+    const submissionId = uuidv4();
+    await db.createPhotoSubmission({
+      id: submissionId,
+      challengeId,
+      giftId: trackingId,
+      photoUrl,
+      submitterPhone: user.phone || null,
+      status: 'pending_approval'
+    });
+
+    // Update gift status
+    await db.updateGiftOrderStatus(trackingId, 'pending_approval');
+
+    // Best-effort sender notification
+    try {
+      if (giftOrder.sender_email) {
+        const sender = await db.getUserById(giftOrder.user_id);
+        const senderEmail = sender?.email || giftOrder.sender_email;
+        await sendGridService.sendApprovalNotificationEmail(senderEmail, {
+          recipientName: giftOrder.recipient_name,
+          photoUrl,
+          giftType: giftOrder.gift_type,
+          challengeDescription: giftOrder.challenge_description || giftOrder.challenge || ''
+        });
+      }
+    } catch (emailError) {
+      console.error('⚠️  Failed to send approval notification email:', emailError.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        submissionId,
+        photoUrl,
+        status: 'pending_approval'
+      }
+    });
+  } catch (error) {
+    console.error('Error submitting challenge photo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit challenge photo',
+      error: error.message
+    });
+  }
+});
+
 // Helper function to format gift order for response
 function formatGiftForResponse(giftOrder) {
   return {

@@ -1042,6 +1042,22 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
                         cardImageUrl: cardImageUrl || null
                     });
                     console.log('✅ Gift saved to database with tracking ID:', trackingId);
+
+                    // Create challenge record and link to gift order
+                    try {
+                        const challengeId = result.data?.challengeId || ('CH' + Date.now());
+                        await db.createChallenge({
+                            id: challengeId,
+                            giftId: trackingId,
+                            type: challengeType || 'custom',
+                            description: challengeDescription || challenge || '',
+                            requirements: { totalSteps: duration || 1 }
+                        });
+                        await db.linkChallengeToGiftOrder(trackingId, challengeId);
+                        console.log('✅ Challenge linked to gift order:', challengeId);
+                    } catch (challengeError) {
+                        console.error('⚠️  Failed to create/link challenge:', challengeError.message);
+                    }
                 } catch (dbError) {
                     console.error('⚠️  Failed to save gift to database:', dbError.message);
                     // Don't fail the request if database save fails
@@ -1098,6 +1114,22 @@ app.post('/api/send-honey-badger', authenticateToken, async (req, res) => {
 
         await db.createGiftOrder(req.user.id, orderData);
 
+        // Create challenge record and link to gift order
+        try {
+            const challengeId = 'CH' + Date.now();
+            await db.createChallenge({
+                id: challengeId,
+                giftId: trackingId,
+                type: challengeType || 'custom',
+                description: challengeDescription || challenge || '',
+                requirements: { totalSteps: duration || 1 }
+            });
+            await db.linkChallengeToGiftOrder(trackingId, challengeId);
+            console.log('✅ Challenge linked to gift order:', challengeId);
+        } catch (challengeError) {
+            console.error('⚠️  Failed to create/link challenge:', challengeError.message);
+        }
+
         res.json({
             success: true,
             message: 'Honey Badger sent successfully!',
@@ -1140,7 +1172,8 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             reminderFrequency: order.reminder_frequency,
             personalNote: order.personal_note,
             message: order.message,
-            cardImageUrl: order.card_image_url
+            cardImageUrl: order.card_image_url,
+            challengeId: order.challenge_id
         }));
 
         res.json({
@@ -1192,7 +1225,8 @@ app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
             reminderFrequency: gift.reminder_frequency,
             personalNote: gift.personal_note,
             message: gift.message,
-            cardImageUrl: gift.card_image_url
+            cardImageUrl: gift.card_image_url,
+            challengeId: gift.challenge_id
         }));
 
         res.json({
