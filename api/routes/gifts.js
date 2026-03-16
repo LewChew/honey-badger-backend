@@ -25,6 +25,25 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.e
   console.log('ℹ️  Twilio not configured - SMS delivery will be disabled');
 }
 
+// Helper to send SMS with opt-out check
+async function sendSmsWithOptOutCheck(to, body) {
+  if (!twilioClient) return null;
+  try {
+    const isOptedOut = await db.isPhoneOptedOut(to);
+    if (isOptedOut) {
+      console.log(`⛔ SMS blocked: ${to} has opted out`);
+      return null;
+    }
+  } catch (err) {
+    console.error('⚠️  Opt-out check failed, sending anyway:', err.message);
+  }
+  return twilioClient.messages.create({
+    body,
+    from: process.env.TWILIO_PHONE_NUMBER,
+    to
+  });
+}
+
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, '../../uploads/photos');
 if (!fs.existsSync(uploadsDir)) {
@@ -225,11 +244,7 @@ router.post('/messages/send-reminder', async (req, res) => {
       });
     }
 
-    const message = await twilioClient.messages.create({
-      body: reminderMessage,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: gift.recipientPhone
-    });
+    const message = await sendSmsWithOptOutCheck(gift.recipientPhone, reminderMessage);
 
     // Update last reminder sent in database
     await db.updateChallengeReminderSent(challengeId);
@@ -237,7 +252,7 @@ router.post('/messages/send-reminder', async (req, res) => {
     res.json({
       success: true,
       data: {
-        messageId: message.sid,
+        messageId: message ? message.sid : null,
         messageSent: reminderMessage,
         sentAt: new Date()
       }
@@ -397,16 +412,38 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
+    // Handle opt-out/opt-in keywords before anything else
+    const lowerBody = (Body || '').toLowerCase().trim();
+    if (lowerBody === 'stop' || lowerBody === 'unsubscribe') {
+      await db.addSmsOptOut(From);
+      console.log(`✅ Phone ${From} opted out of SMS`);
+      // Send final confirmation (bypass opt-out check)
+      await twilioClient.messages.create({
+        body: "You've been unsubscribed from Honey Badger messages. We'll miss you! 🍯\n\nReply START to resubscribe.",
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: From
+      });
+      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
+    if (lowerBody === 'start' || lowerBody === 'yes' || lowerBody === 'unstop') {
+      await db.removeSmsOptOut(From);
+      console.log(`✅ Phone ${From} re-subscribed to SMS`);
+      await sendSmsWithOptOutCheck(From, "🦡 Welcome back! You've been re-subscribed to Honey Badger messages.\n\nYou'll receive notifications about your gift challenges.\n\nReply STOP at any time to opt out.");
+      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
+    if (lowerBody === 'help') {
+      await sendSmsWithOptOutCheck(From, "🍯 HONEY BADGER HELP 🍯\n\nAvailable commands:\nSTATUS - Check progress\nSTART - Re-subscribe to messages\nHELP - Show this message\nSTOP - Unsubscribe\n\nQuestions? Visit https://badgerbot.net");
+      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
     // Find active gifts for this recipient from database
     const activeGifts = await db.getActiveGiftsByRecipientPhone(From);
 
     if (!activeGifts || activeGifts.length === 0) {
       // No active challenges for this number
-      await twilioClient.messages.create({
-        body: "🦡 Hi! You don't have any active challenges right now. Ask your friend to send you a Honey Badger gift!",
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: From
-      });
+      await sendSmsWithOptOutCheck(From, "🦡 Hi! You don't have any active challenges right now. Ask your friend to send you a Honey Badger gift!");
 
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
@@ -455,11 +492,7 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
           // Notify the sender
           if (giftOrder.sender_phone) {
             try {
-              await twilioClient.messages.create({
-                body: `🦡 ${giftOrder.recipient_name || 'Your gift recipient'} just submitted a photo for their challenge! Open the Honey Badger app to review and approve it.`,
-                from: process.env.TWILIO_PHONE_NUMBER,
-                to: giftOrder.sender_phone
-              });
+              await sendSmsWithOptOutCheck(giftOrder.sender_phone, `🦡 ${giftOrder.recipient_name || 'Your gift recipient'} just submitted a photo for their challenge! Open the Honey Badger app to review and approve it.`);
             } catch (smsError) {
               console.error('Failed to notify sender via SMS:', smsError.message);
             }
@@ -521,11 +554,7 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
     }
 
     // Send response
-    await twilioClient.messages.create({
-      body: responseMessage,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: From
-    });
+    await sendSmsWithOptOutCheck(From, responseMessage);
 
     res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
   } catch (error) {
@@ -782,13 +811,9 @@ router.put('/submissions/:id/review', async (req, res) => {
       await db.unlockGiftOrder(submission.gift_id, submission.photo_url);
 
       // Notify recipient
-      if (giftOrder && giftOrder.recipient_phone && twilioClient) {
+      if (giftOrder && giftOrder.recipient_phone) {
         try {
-          await twilioClient.messages.create({
-            body: `🎉 CONGRATULATIONS! 🎉\n\nYour photo has been approved! Your ${giftOrder.gift_type} gift is now unlocked!\n\n${giftOrder.personal_note || giftOrder.message || 'Enjoy your gift!'}`,
-            from: process.env.TWILIO_PHONE_NUMBER,
-            to: giftOrder.recipient_phone
-          });
+          await sendSmsWithOptOutCheck(giftOrder.recipient_phone, `🎉 CONGRATULATIONS! 🎉\n\nYour photo has been approved! Your ${giftOrder.gift_type} gift is now unlocked!\n\n${giftOrder.personal_note || giftOrder.message || 'Enjoy your gift!'}`);
         } catch (smsError) {
           console.error('Failed to notify recipient:', smsError.message);
         }
@@ -822,14 +847,10 @@ router.put('/submissions/:id/review', async (req, res) => {
       await db.updateGiftOrderStatus(submission.gift_id, 'pending');
 
       // Notify recipient
-      if (giftOrder && giftOrder.recipient_phone && twilioClient) {
+      if (giftOrder && giftOrder.recipient_phone) {
         try {
           const reason = rejectionReason ? `Reason: ${rejectionReason}` : 'Please try submitting a new photo.';
-          await twilioClient.messages.create({
-            body: `🦡 Your photo submission wasn't approved this time. ${reason}\n\nDon't give up! Send another photo to complete your challenge!`,
-            from: process.env.TWILIO_PHONE_NUMBER,
-            to: giftOrder.recipient_phone
-          });
+          await sendSmsWithOptOutCheck(giftOrder.recipient_phone, `🦡 Your photo submission wasn't approved this time. ${reason}\n\nDon't give up! Send another photo to complete your challenge!`);
         } catch (smsError) {
           console.error('Failed to notify recipient:', smsError.message);
         }
@@ -1171,17 +1192,14 @@ async function sendInitialMessage(gift, challenge) {
             `🎁 Gift: ${gift.type} - ${giftData.giftValue}\n\n` +
             `🎯 Your challenge: ${challenge.description}\n\n` +
             `Complete it to unlock your gift! I'll be here to help and motivate you. Let's do this!\n\n` +
-            `Reply START when you're ready to begin!`;
+            `Reply START when you're ready to begin!\n\n` +
+            `Reply STOP to opt out. Msg & data rates may apply.`;
 
-          const message = await twilioClient.messages.create({
-            body: messageBody,
-            from: process.env.TWILIO_PHONE_NUMBER,
-            to: gift.recipientPhone
-          });
+          const message = await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 
           results.sms = {
-            success: true,
-            messageId: message.sid,
+            success: !!message,
+            messageId: message ? message.sid : null,
             sentAt: new Date()
           };
         } catch (smsError) {
@@ -1241,11 +1259,7 @@ async function sendCompletionMessage(gift, challenge) {
     `${gift.details?.redemptionInstructions || 'Check your email for redemption details.'}\n\n` +
     `${gift.senderName} will be so happy to hear about your success!`;
 
-  await twilioClient.messages.create({
-    body: messageBody,
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to: gift.recipientPhone
-  });
+  await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 }
 
 async function validateResponse(challenge, body, numMedia, mediaUrl) {

@@ -193,6 +193,20 @@ class DatabaseService {
             else console.log('✅ Password reset tokens table ready');
         });
 
+        // SMS opt-out tracking table
+        const createSmsOptOutsTable = `
+            CREATE TABLE IF NOT EXISTS sms_opt_outs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT UNIQUE NOT NULL,
+                opted_out_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `;
+
+        this.db.run(createSmsOptOutsTable, (err) => {
+            if (err) console.error('Error creating sms_opt_outs table:', err.message);
+            else console.log('✅ SMS opt-outs table ready');
+        });
+
         // Run migrations to update existing tables
         this.runMigrations();
     }
@@ -1117,6 +1131,37 @@ class DatabaseService {
                 } else {
                     resolve(this.changes > 0);
                 }
+            });
+        });
+    }
+
+    // SMS opt-out management
+    async isPhoneOptedOut(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT id FROM sms_opt_outs WHERE phone = ?`;
+            this.db.get(sql, [phone], (err, row) => {
+                if (err) reject(new Error('Opt-out check failed: ' + err.message));
+                else resolve(!!row);
+            });
+        });
+    }
+
+    async addSmsOptOut(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `INSERT OR IGNORE INTO sms_opt_outs (phone) VALUES (?)`;
+            this.db.run(sql, [phone], function(err) {
+                if (err) reject(new Error('Opt-out save failed: ' + err.message));
+                else resolve(true);
+            });
+        });
+    }
+
+    async removeSmsOptOut(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `DELETE FROM sms_opt_outs WHERE phone = ?`;
+            this.db.run(sql, [phone], function(err) {
+                if (err) reject(new Error('Opt-in save failed: ' + err.message));
+                else resolve(this.changes > 0);
             });
         });
     }

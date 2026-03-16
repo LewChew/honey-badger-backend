@@ -1,4 +1,5 @@
 const twilio = require('twilio');
+const db = require('./databaseService');
 
 class TwilioService {
     constructor() {
@@ -22,10 +23,11 @@ class TwilioService {
     }
 
     /**
-     * Send SMS message
+     * Send SMS message (checks opt-out status first)
      * @param {string} to - Recipient phone number (E.164 format)
      * @param {string} body - Message body
      * @param {object} options - Additional options (mediaUrl, statusCallback, etc.)
+     * @param {boolean} options.bypassOptOut - If true, send even if opted out (for STOP confirmation only)
      * @returns {Promise} - Twilio message response
      */
     async sendSMS(to, body, options = {}) {
@@ -37,12 +39,27 @@ class TwilioService {
             throw new Error('Recipient phone number and message body are required.');
         }
 
+        // Check opt-out status before sending (unless bypassed for STOP confirmation)
+        if (!options.bypassOptOut) {
+            try {
+                const isOptedOut = await db.isPhoneOptedOut(to);
+                if (isOptedOut) {
+                    console.log(`⛔ SMS blocked: ${to} has opted out`);
+                    return { sid: null, blocked: true, reason: 'opted_out' };
+                }
+            } catch (err) {
+                console.error('⚠️  Opt-out check failed, sending anyway:', err.message);
+            }
+        }
+
+        const { bypassOptOut, ...twilioOptions } = options;
+
         try {
             const message = await this.client.messages.create({
                 to,
                 from: this.phoneNumber,
                 body,
-                ...options
+                ...twilioOptions
             });
 
             console.log(`✅ SMS sent successfully: ${message.sid}`);
@@ -67,7 +84,8 @@ class TwilioService {
             `🎯 Your Challenge: ${challenge}\n\n` +
             `Complete your challenge to unlock your reward!\n\n` +
             `Track your progress: ${process.env.BASE_URL}/track/${trackingId}\n\n` +
-            `The Honey Badger is watching... 👀`;
+            `The Honey Badger is watching... 👀\n\n` +
+            `Reply STOP to opt out. Msg & data rates may apply.`;
 
         return this.sendSMS(recipientPhone, message);
     }
@@ -84,7 +102,8 @@ class TwilioService {
             `${recipientName}, don't forget about your challenge!\n\n` +
             `🎯 ${challenge}\n\n` +
             `⏰ You have ${daysLeft} days left to complete it!\n\n` +
-            `The Honey Badger doesn't give up... neither should you! 💪`;
+            `The Honey Badger doesn't give up... neither should you! 💪\n\n` +
+            `Reply STOP to opt out.`;
 
         return this.sendSMS(recipientPhone, message);
     }
@@ -147,23 +166,24 @@ class TwilioService {
         // Process the incoming message based on keywords
         const lowerBody = Body.toLowerCase().trim();
 
-        if (lowerBody.includes('status') || lowerBody.includes('progress')) {
-            // Send status update
-            return this.sendStatusUpdate(From);
-        }
-
-        if (lowerBody.includes('help') || lowerBody.includes('commands')) {
-            // Send help message
-            return this.sendHelpMessage(From);
-        }
-
-        if (lowerBody.includes('stop') || lowerBody.includes('unsubscribe')) {
-            // Handle unsubscribe
+        if (lowerBody === 'stop' || lowerBody === 'unsubscribe') {
             return this.handleUnsubscribe(From);
         }
 
+        if (lowerBody === 'start' || lowerBody === 'yes' || lowerBody === 'unstop') {
+            return this.handleResubscribe(From);
+        }
+
+        if (lowerBody.includes('help') || lowerBody.includes('commands')) {
+            return this.sendHelpMessage(From);
+        }
+
+        if (lowerBody.includes('status') || lowerBody.includes('progress')) {
+            return this.sendStatusUpdate(From);
+        }
+
         // Default response
-        return this.sendSMS(From, 
+        return this.sendSMS(From,
             `🍯 Honey Badger received your message!\n\n` +
             `Reply with:\n` +
             `STATUS - Check your challenge progress\n` +
@@ -196,25 +216,51 @@ class TwilioService {
         const message = `🍯 HONEY BADGER HELP 🍯\n\n` +
             `Available commands:\n` +
             `STATUS - Check progress\n` +
-            `PAUSE - Pause challenge\n` +
-            `RESUME - Resume challenge\n` +
+            `START - Re-subscribe to messages\n` +
             `HELP - Show this message\n` +
             `STOP - Unsubscribe\n\n` +
-            `Questions? Visit ${process.env.BASE_URL}/help`;
+            `Questions? Visit https://badgerbot.net`;
 
         return this.sendSMS(phoneNumber, message);
     }
 
     /**
-     * Handle unsubscribe request
+     * Handle unsubscribe request - persists opt-out to database
      * @param {string} phoneNumber - Phone number to unsubscribe
      * @returns {Promise} - Twilio message response
      */
     async handleUnsubscribe(phoneNumber) {
-        // In a real implementation, update database to mark user as unsubscribed
+        try {
+            await db.addSmsOptOut(phoneNumber);
+            console.log(`✅ Phone ${phoneNumber} opted out of SMS`);
+        } catch (err) {
+            console.error('⚠️  Failed to save opt-out:', err.message);
+        }
+
         const message = `You've been unsubscribed from Honey Badger messages. ` +
             `We'll miss you! 🍯\n\n` +
-            `To resubscribe, visit ${process.env.BASE_URL}`;
+            `Reply START to resubscribe.`;
+
+        // Bypass opt-out check for this final confirmation message
+        return this.sendSMS(phoneNumber, message, { bypassOptOut: true });
+    }
+
+    /**
+     * Handle resubscribe request - removes opt-out from database
+     * @param {string} phoneNumber - Phone number to resubscribe
+     * @returns {Promise} - Twilio message response
+     */
+    async handleResubscribe(phoneNumber) {
+        try {
+            await db.removeSmsOptOut(phoneNumber);
+            console.log(`✅ Phone ${phoneNumber} re-subscribed to SMS`);
+        } catch (err) {
+            console.error('⚠️  Failed to remove opt-out:', err.message);
+        }
+
+        const message = `🦡 Welcome back! You've been re-subscribed to Honey Badger messages.\n\n` +
+            `You'll receive notifications about your gift challenges.\n\n` +
+            `Reply STOP at any time to opt out.`;
 
         return this.sendSMS(phoneNumber, message);
     }
