@@ -88,6 +88,16 @@ app.get('/sms-terms', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'sms-consent.html'));
 });
 
+// Privacy policy page
+app.get(['/privacy', '/privacy-policy'], (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
+});
+
+// Terms of service page
+app.get(['/terms', '/terms-of-service'], (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'terms.html'));
+});
+
 // Password reset page
 app.get('/reset-password', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));

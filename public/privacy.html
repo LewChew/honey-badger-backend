@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Honey Badger</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6; color: #333; background-color: #f8f9fa;
+        }
+        .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+        header { text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e9ecef; }
+        h1 { color: #1a1a1a; font-size: 2rem; margin-bottom: 10px; }
+        .subtitle { color: #6c757d; font-size: 1.1rem; }
+        .last-updated { color: #868e96; font-size: 0.9rem; margin-top: 10px; }
+        section { background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        h2 { color: #1a1a1a; font-size: 1.25rem; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #e9ecef; }
+        p { margin-bottom: 12px; }
+        ul { margin-left: 24px; margin-bottom: 12px; }
+        li { margin-bottom: 8px; }
+        .highlight-box { background: #f1f3f4; border-left: 4px solid #4285f4; padding: 16px; margin: 16px 0; border-radius: 0 4px 4px 0; }
+        code { background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 0.9em; }
+        a { color: #4285f4; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e9ecef; color: #868e96; font-size: 0.9rem; }
+        footer a { color: #868e96; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Privacy Policy</h1>
+            <p class="subtitle">Honey Badger Gift Notification Service</p>
+            <p class="last-updated">Last Updated: March 16, 2026</p>
+        </header>
+
+        <section>
+            <h2>Introduction</h2>
+            <p>Honey Badger ("we," "us," or "our") operates the Honey Badger mobile application and the website at <strong>badgerbot.net</strong> (the "Service"). This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our Service.</p>
+            <p>By using the Service, you agree to the collection and use of information in accordance with this policy.</p>
+        </section>
+
+        <section>
+            <h2>Information We Collect</h2>
+            <p>We collect the following types of information:</p>
+            <ul>
+                <li><strong>Account Information:</strong> Name, email address, phone number, and hashed password when you create an account.</li>
+                <li><strong>Gift Information:</strong> Recipient names, phone numbers, email addresses, gift types, gift values, personal messages, and challenge details that you provide when sending a gift.</li>
+                <li><strong>Challenge Submissions:</strong> Photos and text responses submitted by recipients to complete challenges.</li>
+                <li><strong>Usage Data:</strong> Server logs including IP addresses, request timestamps, and API usage for service operation and security.</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>How We Use Your Information</h2>
+            <p>We use the information we collect to:</p>
+            <ul>
+                <li>Create and manage your account</li>
+                <li>Deliver gift notifications to recipients via SMS and email</li>
+                <li>Send challenge reminders and completion confirmations</li>
+                <li>Process challenge submissions (photos, text responses)</li>
+                <li>Facilitate the gift sender's review and approval of challenge submissions</li>
+                <li>Provide customer support</li>
+                <li>Maintain and improve the Service</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>SMS and Mobile Information</h2>
+            <div class="highlight-box">
+                <strong>No mobile information collected as part of the Honey Badger SMS opt-in will be shared with or sold to third parties or affiliates for marketing or promotional purposes.</strong>
+            </div>
+            <p>Phone numbers provided for gift delivery are used solely to send transactional messages related to the gift and challenge lifecycle. These include:</p>
+            <ul>
+                <li>Initial gift notification</li>
+                <li>Challenge reminders (based on sender settings)</li>
+                <li>Submission confirmations</li>
+                <li>Gift unlock notifications</li>
+            </ul>
+            <p>For full details on our SMS practices, please see our <a href="/sms-terms">SMS Consent Policy</a>.</p>
+        </section>
+
+        <section>
+            <h2>Information Sharing and Disclosure</h2>
+            <p>We do <strong>not</strong> sell, trade, or rent your personal information to third parties.</p>
+            <p>We may share information only in the following circumstances:</p>
+            <ul>
+                <li><strong>Service Providers:</strong> We use third-party services to operate our platform, including Twilio (SMS delivery), SendGrid (email delivery), and cloud hosting providers. These providers only receive the minimum information necessary to perform their services and are bound by their own privacy policies.</li>
+                <li><strong>Gift Sender/Recipient:</strong> When a gift is sent, the sender and recipient can see limited information about each other as necessary for the gift exchange (e.g., sender's name, challenge details, submission photos).</li>
+                <li><strong>Legal Requirements:</strong> We may disclose information if required by law, regulation, legal process, or governmental request.</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Data Security</h2>
+            <p>We implement appropriate security measures to protect your information:</p>
+            <ul>
+                <li>Passwords are hashed using bcrypt with industry-standard salt rounds</li>
+                <li>Authentication uses JSON Web Tokens (JWT) with expiration</li>
+                <li>HTTPS encryption for all data in transit</li>
+                <li>Security headers via Helmet middleware</li>
+                <li>Input validation and sanitization on all user inputs</li>
+            </ul>
+            <p>While we strive to protect your information, no method of transmission over the internet is 100% secure. We cannot guarantee absolute security.</p>
+        </section>
+
+        <section>
+            <h2>Data Retention</h2>
+            <p>We retain your personal information for as long as your account is active or as needed to provide the Service. Gift and challenge data is retained for the duration of the gift lifecycle and a reasonable period afterward for record-keeping. You may request deletion of your account and associated data by contacting us.</p>
+        </section>
+
+        <section>
+            <h2>Your Rights</h2>
+            <p>You have the right to:</p>
+            <ul>
+                <li>Access the personal information we hold about you</li>
+                <li>Request correction of inaccurate information</li>
+                <li>Request deletion of your account and data</li>
+                <li>Opt out of SMS messages by replying <code>STOP</code></li>
+                <li>Opt out of email notifications through your account settings</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Children's Privacy</h2>
+            <p>The Service is not directed to individuals under the age of 13. We do not knowingly collect personal information from children under 13. If we become aware that we have collected information from a child under 13, we will take steps to delete that information.</p>
+        </section>
+
+        <section>
+            <h2>Changes to This Policy</h2>
+            <p>We may update this Privacy Policy from time to time. We will notify you of any changes by updating the "Last Updated" date at the top of this page. Continued use of the Service after changes constitutes acceptance of the updated policy.</p>
+        </section>
+
+        <section>
+            <h2>Contact Us</h2>
+            <p>If you have questions about this Privacy Policy or our data practices, contact us at:</p>
+            <ul>
+                <li><strong>Email:</strong> support@badgerbot.net</li>
+                <li><strong>Website:</strong> <a href="https://badgerbot.net">badgerbot.net</a></li>
+            </ul>
+        </section>
+
+        <footer>
+            <p><a href="/sms-terms">SMS Consent Policy</a> | <a href="/terms">Terms of Service</a></p>
+            <p>&copy; 2026 Honey Badger. All rights reserved.</p>
+        </footer>
+    </div>
+</body>
+</html>
