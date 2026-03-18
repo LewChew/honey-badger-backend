@@ -268,6 +268,152 @@ router.post('/messages/send-reminder', async (req, res) => {
 });
 
 /**
+ * Sender-initiated gift unlock
+ * POST /api/gifts/:giftId/unlock
+ */
+router.post('/gifts/:giftId/unlock', async (req, res) => {
+  try {
+    const { giftId } = req.params;
+
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Fetch gift and verify sender ownership
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+    if (String(giftOrder.user_id) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'You can only unlock gifts you sent' });
+    }
+    if (giftOrder.unlocked === 1) {
+      return res.status(400).json({ success: false, message: 'Gift is already unlocked' });
+    }
+
+    // Unlock the gift
+    await db.unlockGiftOrder(giftId);
+
+    // Notify recipient via SMS
+    if (giftOrder.recipient_phone) {
+      const senderName = giftOrder.sender_name || 'Someone special';
+      const unlockMessage = `🦡 Great news! ${senderName} has unlocked your gift! Open the Honey Badger app to claim it now.`;
+      await sendSmsWithOptOutCheck(giftOrder.recipient_phone, unlockMessage);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        giftId,
+        status: 'completed',
+        unlocked: true,
+        unlockedAt: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Error unlocking gift:', error);
+    res.status(500).json({ success: false, message: 'Failed to unlock gift', error: error.message });
+  }
+});
+
+/**
+ * Send nudge message to recipient
+ * POST /api/gifts/:giftId/nudge
+ */
+router.post('/gifts/:giftId/nudge', async (req, res) => {
+  try {
+    const { giftId } = req.params;
+    const { customMessage } = req.body;
+
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Fetch gift and verify sender ownership
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+    if (String(giftOrder.user_id) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'You can only nudge gifts you sent' });
+    }
+    if (giftOrder.unlocked === 1) {
+      return res.status(400).json({ success: false, message: 'Gift is already unlocked — no nudge needed' });
+    }
+    if (!giftOrder.recipient_phone) {
+      return res.status(400).json({ success: false, message: 'No recipient phone number on this gift' });
+    }
+
+    // Build the nudge message
+    let nudgeMessage;
+    const senderName = giftOrder.sender_name || 'Someone special';
+
+    if (customMessage) {
+      nudgeMessage = `🦡 Message from ${senderName}: "${customMessage}" — Open Honey Badger to complete your challenge and claim your gift!`;
+    } else {
+      // Use existing generateReminderMessage with challenge data
+      const challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : null;
+      const gift = {
+        senderName,
+        recipientPhone: giftOrder.recipient_phone,
+        type: giftOrder.gift_type
+      };
+      nudgeMessage = generateReminderMessage(gift, challenge || {
+        type: giftOrder.challenge_type || 'custom',
+        description: giftOrder.challenge_description || giftOrder.challenge
+      });
+    }
+
+    if (!twilioClient) {
+      return res.status(503).json({ success: false, message: 'SMS service not configured' });
+    }
+
+    const message = await sendSmsWithOptOutCheck(giftOrder.recipient_phone, nudgeMessage);
+
+    // Update last reminder sent if we have a challenge
+    if (giftOrder.challenge_id) {
+      await db.updateChallengeReminderSent(giftOrder.challenge_id);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        messageId: message ? message.sid : null,
+        messageSent: nudgeMessage,
+        sentAt: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Error sending nudge:', error);
+    res.status(500).json({ success: false, message: 'Failed to send nudge', error: error.message });
+  }
+});
+
+/**
  * Track challenge progress
  * GET /api/challenges/:challengeId/progress
  */
