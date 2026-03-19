@@ -1183,7 +1183,9 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             personalNote: order.personal_note,
             message: order.message,
             cardImageUrl: order.card_image_url,
-            challengeId: order.challenge_id
+            challengeId: order.challenge_id,
+            unlocked: order.unlocked === 1,
+            unlockedAt: order.unlocked_at
         }));
 
         res.json({
