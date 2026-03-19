@@ -375,17 +375,18 @@ router.post('/gifts/:giftId/nudge', async (req, res) => {
     if (customMessage) {
       nudgeMessage = `🦡 Message from ${senderName}: "${customMessage}" — Open Honey Badger to complete your challenge and claim your gift!`;
     } else {
-      // Use existing generateReminderMessage with challenge data
+      // Use generateReminderMessage only if we have a full challenge with progress
       const challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : null;
-      const gift = {
-        senderName,
-        recipientPhone: giftOrder.recipient_phone,
-        type: giftOrder.gift_type
-      };
-      nudgeMessage = generateReminderMessage(gift, challenge || {
-        type: giftOrder.challenge_type || 'custom',
-        description: giftOrder.challenge_description || giftOrder.challenge
-      });
+      if (challenge && challenge.progress) {
+        const gift = {
+          senderName,
+          recipientPhone: giftOrder.recipient_phone,
+          type: giftOrder.gift_type
+        };
+        nudgeMessage = generateReminderMessage(gift, challenge);
+      } else {
+        nudgeMessage = `🦡 Hey! ${senderName} is waiting for you to complete your challenge and claim your gift! Open Honey Badger to get started.`;
+      }
     }
 
     if (!twilioClient) {
