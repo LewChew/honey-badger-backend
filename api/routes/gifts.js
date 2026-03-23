@@ -329,6 +329,142 @@ router.post('/gifts/:giftId/unlock', async (req, res) => {
 });
 
 /**
+ * Recipient self-unlock a gift
+ * POST /api/gifts/:giftId/recipient-unlock
+ */
+router.post('/gifts/:giftId/recipient-unlock', async (req, res) => {
+  try {
+    const { giftId } = req.params;
+
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Fetch gift
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+    if (giftOrder.unlocked === 1) {
+      return res.status(400).json({ success: false, message: 'Gift is already unlocked' });
+    }
+
+    // Verify recipient ownership — match user email/phone to gift recipient
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const isRecipient = (user.email && giftOrder.recipient_email && user.email.toLowerCase() === giftOrder.recipient_email.toLowerCase()) ||
+                        (user.phone && giftOrder.recipient_phone && user.phone === giftOrder.recipient_phone);
+    if (!isRecipient) {
+      return res.status(403).json({ success: false, message: 'Only the gift recipient can unlock this gift' });
+    }
+
+    // Unlock the gift
+    await db.unlockGiftOrder(giftId);
+
+    // Notify sender via SMS or email
+    const senderName = giftOrder.sender_name || 'Someone';
+    const recipientName = giftOrder.recipient_name || 'The recipient';
+
+    res.json({
+      success: true,
+      data: {
+        giftId,
+        status: 'completed',
+        unlocked: true,
+        unlockedAt: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Error recipient-unlocking gift:', error);
+    res.status(500).json({ success: false, message: 'Failed to unlock gift', error: error.message });
+  }
+});
+
+/**
+ * Collect/redeem an unlocked gift
+ * POST /api/gifts/:giftId/collect
+ */
+router.post('/gifts/:giftId/collect', async (req, res) => {
+  try {
+    const { giftId } = req.params;
+
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Fetch gift
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+
+    // Must be unlocked first
+    if (giftOrder.unlocked !== 1) {
+      return res.status(400).json({ success: false, message: 'Gift must be unlocked before it can be collected' });
+    }
+
+    // Already redeemed
+    if (giftOrder.redeemed === 1) {
+      return res.status(400).json({ success: false, message: 'Gift has already been collected' });
+    }
+
+    // Verify recipient ownership
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const isRecipient = (user.email && giftOrder.recipient_email && user.email.toLowerCase() === giftOrder.recipient_email.toLowerCase()) ||
+                        (user.phone && giftOrder.recipient_phone && user.phone === giftOrder.recipient_phone);
+    if (!isRecipient) {
+      return res.status(403).json({ success: false, message: 'Only the gift recipient can collect this gift' });
+    }
+
+    // Redeem the gift
+    await db.redeemGiftOrder(giftId);
+
+    res.json({
+      success: true,
+      data: {
+        giftId,
+        redeemed: true,
+        redeemedAt: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Error collecting gift:', error);
+    res.status(500).json({ success: false, message: 'Failed to collect gift', error: error.message });
+  }
+});
+
+/**
  * Send nudge message to recipient
  * POST /api/gifts/:giftId/nudge
  */
@@ -463,6 +599,20 @@ router.get('/challenges/:challengeId/progress', async (req, res) => {
  */
 router.put('/challenges/:challengeId/progress', async (req, res) => {
   try {
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
     const { challengeId } = req.params;
     const { stepCompleted, submission, metadata } = req.body;
 
@@ -497,27 +647,11 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
       });
     }
 
-    // Check if challenge is completed
-    let giftUnlocked = false;
+    // Mark completed if steps met, but do NOT unlock the gift here.
+    // Gift unlock only happens via sender approval (submissions/:id/review)
+    // or sender force-unlock (gifts/:id/unlock).
     if (challenge.progress.currentStep >= challenge.progress.totalSteps) {
       challenge.progress.completed = true;
-      giftUnlocked = true;
-
-      // Unlock the gift in database
-      const giftOrder = await db.getGiftOrderByTrackingId(challenge.gift_id);
-      if (giftOrder) {
-        await db.unlockGiftOrder(challenge.gift_id);
-
-        // Send completion message
-        const gift = {
-          senderName: giftOrder.sender_name || 'Someone special',
-          recipientPhone: giftOrder.recipient_phone,
-          recipientEmail: giftOrder.recipient_email,
-          type: giftOrder.gift_type,
-          details: { redemptionInstructions: giftOrder.personal_note || giftOrder.message }
-        };
-        await sendCompletionMessage(gift, challenge);
-      }
     }
 
     // Update challenge progress in database
@@ -529,7 +663,7 @@ router.put('/challenges/:challengeId/progress', async (req, res) => {
         challengeId,
         progress: challenge.progress,
         completed: challenge.progress.completed,
-        giftUnlocked
+        giftUnlocked: false
       }
     });
   } catch (error) {
@@ -928,6 +1062,22 @@ router.post('/challenges/:id/submit-photo', async (req, res) => {
  */
 router.put('/submissions/:id/review', async (req, res) => {
   try {
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
     const { id: submissionId } = req.params;
     const { action, rejectionReason } = req.body;
 
@@ -947,8 +1097,16 @@ router.put('/submissions/:id/review', async (req, res) => {
       });
     }
 
-    // Get gift order for notifications
+    // Get gift order for notifications and ownership check
     const giftOrder = await db.getGiftOrderByTrackingId(submission.gift_id);
+
+    // Verify sender ownership — only the gift sender can approve/reject
+    if (!giftOrder || String(giftOrder.user_id) !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the gift sender can review submissions'
+      });
+    }
 
     if (action === 'approve') {
       // Update submission status

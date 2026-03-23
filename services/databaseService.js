@@ -272,7 +272,9 @@ class DatabaseService {
                 { name: 'unlocked', type: 'BOOLEAN DEFAULT 0' },
                 { name: 'photo_submission_url', type: 'TEXT' },
                 { name: 'unlocked_at', type: 'DATETIME' },
-                { name: 'card_image_url', type: 'TEXT' }
+                { name: 'card_image_url', type: 'TEXT' },
+                { name: 'redeemed', type: 'BOOLEAN DEFAULT 0' },
+                { name: 'redeemed_at', type: 'DATETIME' }
             ];
 
             photoWorkflowColumns.forEach(column => {
@@ -1054,6 +1056,24 @@ class DatabaseService {
             this.db.run(sql, [photoSubmissionUrl, trackingId], function(err) {
                 if (err) {
                     reject(new Error('Gift order unlock failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    async redeemGiftOrder(trackingId) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                UPDATE gift_orders
+                SET redeemed = 1, redeemed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE tracking_id = ?
+            `;
+
+            this.db.run(sql, [trackingId], function(err) {
+                if (err) {
+                    reject(new Error('Gift order redeem failed: ' + err.message));
                 } else {
                     resolve(this.changes > 0);
                 }

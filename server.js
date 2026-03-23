@@ -1185,7 +1185,9 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             cardImageUrl: order.card_image_url,
             challengeId: order.challenge_id,
             unlocked: order.unlocked === 1,
-            unlockedAt: order.unlocked_at
+            unlockedAt: order.unlocked_at,
+            redeemed: order.redeemed === 1,
+            redeemedAt: order.redeemed_at
         }));
 
         res.json({
@@ -1238,7 +1240,11 @@ app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
             personalNote: gift.personal_note,
             message: gift.message,
             cardImageUrl: gift.card_image_url,
-            challengeId: gift.challenge_id
+            challengeId: gift.challenge_id,
+            unlocked: gift.unlocked === 1,
+            unlockedAt: gift.unlocked_at,
+            redeemed: gift.redeemed === 1,
+            redeemedAt: gift.redeemed_at
         }));
 
         res.json({
