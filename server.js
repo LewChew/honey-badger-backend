@@ -103,6 +103,34 @@ app.get('/reset-password', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
 });
 
+// Short gift deep link — opens the app via universal link or redirects to App Store
+app.get('/g/:trackingId', (req, res) => {
+    const { trackingId } = req.params;
+    const appScheme = `honeybadger://gift/${trackingId}`;
+    const appStoreUrl = 'https://apps.apple.com/app/honey-badger-ai-gifts/id6745189755';
+    const universalLink = `https://honeybadgerapp.com/gift/${trackingId}`;
+
+    res.send(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Opening Honey Badger...</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#1a1a2e;color:#fff;text-align:center}
+.c{max-width:320px}.btn{display:inline-block;margin:12px 8px;padding:14px 28px;background:#f5a623;color:#1a1a2e;border-radius:12px;text-decoration:none;font-weight:700;font-size:16px}</style>
+</head><body>
+<div class="c">
+<p style="font-size:48px">🦡</p>
+<h2>Opening your gift...</h2>
+<p>If the app doesn't open automatically:</p>
+<a class="btn" href="${appStoreUrl}">Get the App</a>
+</div>
+<script>
+window.location.href="${appScheme}";
+setTimeout(function(){window.location.href="${appStoreUrl}"},1500);
+</script>
+</body></html>`);
+});
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);

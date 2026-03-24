@@ -26,8 +26,9 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.e
   console.log('ℹ️  Twilio not configured - SMS delivery will be disabled');
 }
 
-// Helper to send SMS with opt-out check
-async function sendSmsWithOptOutCheck(to, body) {
+// Helper to send SMS/MMS with opt-out check
+// Pass mediaUrl to send an MMS with an image
+async function sendSmsWithOptOutCheck(to, body, mediaUrl) {
   if (!twilioClient) return null;
   try {
     const isOptedOut = await db.isPhoneOptedOut(to);
@@ -42,11 +43,15 @@ async function sendSmsWithOptOutCheck(to, body) {
   if (process.env.SMS_TEST_OVERRIDE_TO) {
     console.log(`📱 SMS test mode: redirecting from ${to} → ${actualTo}`);
   }
-  return twilioClient.messages.create({
+  const messageParams = {
     body,
     from: process.env.TWILIO_PHONE_NUMBER,
     to: actualTo
-  });
+  };
+  if (mediaUrl) {
+    messageParams.mediaUrl = [mediaUrl];
+  }
+  return twilioClient.messages.create(messageParams);
 }
 
 // Ensure uploads directory exists
@@ -743,7 +748,29 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
     if (lowerBody === 'start' || lowerBody === 'yes' || lowerBody === 'unstop') {
       await db.removeSmsOptOut(From);
       console.log(`✅ Phone ${From} re-subscribed to SMS`);
-      await sendSmsWithOptOutCheck(From, "🦡 Welcome back! You've been re-subscribed to Honey Badger messages.\n\nYou'll receive notifications about your gift challenges.\n\nReply STOP at any time to opt out.");
+
+      // Look up active gifts for this recipient to build a deep link
+      const activeGifts = await db.getActiveGiftsByRecipientPhone(From);
+      const baseUrl = process.env.BASE_URL || 'https://honeybadgerapp.com';
+      const badgerImageUrl = `${baseUrl}/images/honey-badger.png`;
+
+      let messageBody;
+      if (activeGifts && activeGifts.length > 0) {
+        const gift = activeGifts[0];
+        const giftLink = `https://honeybadgerapp.com/g/${gift.tracking_id}`;
+        const senderName = gift.sender_name || 'Someone special';
+        messageBody = `🦡 LET'S GO! The Honey Badger is fired up!\n\n` +
+          `${senderName} sent you a gift — complete your challenge to unlock it!\n\n` +
+          `👉 Open your gift: ${giftLink}\n\n` +
+          `Don't have the app? Download it and tap the link above to get started!\n\n` +
+          `Reply STOP at any time to opt out.`;
+      } else {
+        messageBody = `🦡 Welcome back! You've been re-subscribed to Honey Badger messages.\n\n` +
+          `You'll receive notifications about your gift challenges.\n\n` +
+          `Reply STOP at any time to opt out.`;
+      }
+
+      await sendSmsWithOptOutCheck(From, messageBody, badgerImageUrl);
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
@@ -1529,8 +1556,14 @@ async function sendInitialMessage(gift, challenge) {
         };
       } else {
         try {
-          const aiBody = await aiMessage.generateInitialMessage(gift, challenge);
-          const messageBody = aiBody + `\n\nReply STOP to opt out. Msg & data rates may apply.`;
+          const giftLink = `https://honeybadgerapp.com/g/${gift.id}`;
+          const messageBody = `🦡 HONEY BADGER HERE! ${gift.senderName} sent you a special gift!\n\n` +
+            `🎁 Gift: ${gift.type} - ${giftData.giftValue}\n\n` +
+            `🎯 Your challenge: ${challenge.description}\n\n` +
+            `Complete it to unlock your gift! I'll be here to help and motivate you. Let's do this!\n\n` +
+            `👉 Open your gift: ${giftLink}\n\n` +
+            `Reply START when you're ready to begin!\n\n` +
+            `Reply STOP to opt out. Msg & data rates may apply.`;
 
           const message = await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 
