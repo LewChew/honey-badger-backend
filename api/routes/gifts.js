@@ -4,6 +4,7 @@ const twilio = require('twilio');
 const { v4: uuidv4 } = require('uuid');
 const sendGridService = require('../../services/sendGridService');
 const db = require('../../services/databaseService');
+const aiMessage = require('../../services/aiMessageService');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -37,10 +38,14 @@ async function sendSmsWithOptOutCheck(to, body) {
   } catch (err) {
     console.error('⚠️  Opt-out check failed, sending anyway:', err.message);
   }
+  const actualTo = process.env.SMS_TEST_OVERRIDE_TO || to;
+  if (process.env.SMS_TEST_OVERRIDE_TO) {
+    console.log(`📱 SMS test mode: redirecting from ${to} → ${actualTo}`);
+  }
   return twilioClient.messages.create({
     body,
     from: process.env.TWILIO_PHONE_NUMBER,
-    to
+    to: actualTo
   });
 }
 
@@ -373,7 +378,35 @@ router.post('/gifts/:giftId/recipient-unlock', async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only the gift recipient can unlock this gift' });
     }
 
-    // Unlock the gift
+    // Verify the sender's challenge has been completed before allowing unlock
+    const challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : null;
+    const challengeType = (challenge && challenge.type) || giftOrder.challenge_type;
+
+    if (challengeType) {
+      const isPhotoChallenge = challengeType === 'photo' || challengeType === 'video';
+
+      if (isPhotoChallenge) {
+        // Photo/video challenges require sender approval — check for an approved submission
+        const submissions = await db.getPhotoSubmissionsByGiftId(giftId);
+        const hasApproved = submissions && submissions.some(s => s.status === 'approved');
+        if (!hasApproved) {
+          const hasPending = submissions && submissions.some(s => s.status === 'pending_approval');
+          if (hasPending) {
+            return res.status(403).json({ success: false, message: 'Your photo submission is awaiting sender approval. You\'ll be notified once it\'s reviewed!' });
+          }
+          return res.status(403).json({ success: false, message: 'You must complete the challenge before unlocking this gift. Submit a photo to get started!' });
+        }
+      } else {
+        // Non-photo challenges require progress completion
+        if (challenge && challenge.progress) {
+          if (!challenge.progress.completed && challenge.progress.currentStep < challenge.progress.totalSteps) {
+            return res.status(403).json({ success: false, message: 'You must complete the challenge before unlocking this gift.' });
+          }
+        }
+      }
+    }
+
+    // Challenge verified — unlock the gift
     await db.unlockGiftOrder(giftId);
 
     // Notify sender via SMS or email
@@ -511,7 +544,7 @@ router.post('/gifts/:giftId/nudge', async (req, res) => {
     if (customMessage) {
       nudgeMessage = `🦡 Message from ${senderName}: "${customMessage}" — Open Honey Badger to complete your challenge and claim your gift!`;
     } else {
-      // Use generateReminderMessage only if we have a full challenge with progress
+      // Use AI-powered nudge message
       const challenge = giftOrder.challenge_id ? await db.getChallengeById(giftOrder.challenge_id) : null;
       if (challenge && challenge.progress) {
         const gift = {
@@ -519,9 +552,9 @@ router.post('/gifts/:giftId/nudge', async (req, res) => {
           recipientPhone: giftOrder.recipient_phone,
           type: giftOrder.gift_type
         };
-        nudgeMessage = generateReminderMessage(gift, challenge);
+        nudgeMessage = await generateReminderMessage(gift, challenge);
       } else {
-        nudgeMessage = `🦡 Hey! ${senderName} is waiting for you to complete your challenge and claim your gift! Open Honey Badger to get started.`;
+        nudgeMessage = await aiMessage.generateNudgeMessage(senderName, challenge);
       }
     }
 
@@ -731,6 +764,7 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
 
     // Process the response based on active challenges
     let responseMessage = '';
+    let lastChallenge = null;
 
     for (const giftOrder of activeGifts) {
       // Get challenge from database
@@ -745,6 +779,8 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
           progress: { started: false, completed: false, currentStep: 0, totalSteps: 1, submissions: [] }
         };
       }
+
+      lastChallenge = challenge;
 
       // Check if response matches challenge requirements (photo challenges need media)
       const hasPhoto = parseInt(NumMedia) > 0;
@@ -831,7 +867,7 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
     }
 
     if (!responseMessage) {
-      responseMessage = "🦡 Hmm, that doesn't seem right for your challenge. Try again! Reply HELP for hints.";
+      responseMessage = await aiMessage.generateInvalidResponseMessage(lastChallenge);
     }
 
     // Send response
@@ -1493,12 +1529,8 @@ async function sendInitialMessage(gift, challenge) {
         };
       } else {
         try {
-          const messageBody = `🦡 HONEY BADGER HERE! ${gift.senderName} sent you a special gift!\n\n` +
-            `🎁 Gift: ${gift.type} - ${giftData.giftValue}\n\n` +
-            `🎯 Your challenge: ${challenge.description}\n\n` +
-            `Complete it to unlock your gift! I'll be here to help and motivate you. Let's do this!\n\n` +
-            `Reply START when you're ready to begin!\n\n` +
-            `Reply STOP to opt out. Msg & data rates may apply.`;
+          const aiBody = await aiMessage.generateInitialMessage(gift, challenge);
+          const messageBody = aiBody + `\n\nReply STOP to opt out. Msg & data rates may apply.`;
 
           const message = await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 
@@ -1541,29 +1573,12 @@ async function sendInitialMessage(gift, challenge) {
   }
 }
 
-function generateReminderMessage(gift, challenge) {
-  const motivationalMessages = [
-    "🦡 Honey Badger doesn't give up, and neither should you!",
-    "🦡 Still working on that challenge? You've got this!",
-    "🦡 Your gift is waiting! Let's crush this challenge!",
-    "🦡 Honey Badger believes in you! Keep going!",
-    "🦡 Remember: " + gift.senderName + " is rooting for you!"
-  ];
-  
-  const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
-  const progress = `Progress: ${challenge.progress.currentStep}/${challenge.progress.totalSteps} steps`;
-  
-  return `${randomMessage}\n\n${progress}\n\nChallenge: ${challenge.description}`;
+async function generateReminderMessage(gift, challenge) {
+  return aiMessage.generateReminderMessage(gift, challenge);
 }
 
 async function sendCompletionMessage(gift, challenge) {
-  const messageBody = `🎉 CONGRATULATIONS! 🎉\n\n` +
-    `🦡 Honey Badger is SO PROUD of you!\n\n` +
-    `You've completed the challenge and unlocked your gift!\n\n` +
-    `🎁 Your ${gift.type} is now available!\n` +
-    `${gift.details?.redemptionInstructions || 'Check your email for redemption details.'}\n\n` +
-    `${gift.senderName} will be so happy to hear about your success!`;
-
+  const messageBody = await aiMessage.generateCompletionMessage(gift, challenge);
   await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 }
 
@@ -1584,16 +1599,11 @@ async function validateResponse(challenge, body, numMedia, mediaUrl) {
 }
 
 async function getProgressMessage(gift, challenge) {
-  const remaining = challenge.progress.totalSteps - challenge.progress.currentStep;
-  return `🦡 Great job! You're making progress!\n\n` +
-    `${remaining} more step${remaining > 1 ? 's' : ''} to go!\n` +
-    `Keep it up - your ${gift.type} is almost yours!`;
+  return aiMessage.generateProgressMessage(gift, challenge);
 }
 
 async function getCompletionMessage(gift, challenge) {
-  return `🎊 YOU DID IT! 🎊\n\n` +
-    `Challenge COMPLETE! Your ${gift.type} is unlocked!\n\n` +
-    `${gift.details?.redemptionInstructions || 'Congratulations on your achievement!'}`;
+  return aiMessage.generateCompletionMessage(gift, challenge);
 }
 
 module.exports = router;
