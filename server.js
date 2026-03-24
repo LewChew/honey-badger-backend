@@ -108,7 +108,7 @@ app.get('/g/:trackingId', (req, res) => {
     const { trackingId } = req.params;
     const appScheme = `honeybadger://gift/${trackingId}`;
     const appStoreUrl = 'https://apps.apple.com/app/honey-badger-ai-gifts/id6745189755';
-    const universalLink = `https://honeybadgerapp.com/gift/${trackingId}`;
+    const universalLink = `https://badgerbot.net/gift/${trackingId}`;
 
     res.send(`<!DOCTYPE html>
 <html><head>

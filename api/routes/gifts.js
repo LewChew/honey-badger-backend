@@ -751,13 +751,13 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
 
       // Look up active gifts for this recipient to build a deep link
       const activeGifts = await db.getActiveGiftsByRecipientPhone(From);
-      const baseUrl = process.env.BASE_URL || 'https://honeybadgerapp.com';
+      const baseUrl = process.env.BASE_URL || 'https://badgerbot.net';
       const badgerImageUrl = `${baseUrl}/images/honey-badger.png`;
 
       let messageBody;
       if (activeGifts && activeGifts.length > 0) {
         const gift = activeGifts[0];
-        const giftLink = `https://honeybadgerapp.com/g/${gift.tracking_id}`;
+        const giftLink = `https://badgerbot.net/g/${gift.tracking_id}`;
         const senderName = gift.sender_name || 'Someone special';
         messageBody = `🦡 LET'S GO! The Honey Badger is fired up!\n\n` +
           `${senderName} sent you a gift — complete your challenge to unlock it!\n\n` +
@@ -1556,7 +1556,7 @@ async function sendInitialMessage(gift, challenge) {
         };
       } else {
         try {
-          const giftLink = `https://honeybadgerapp.com/g/${gift.id}`;
+          const giftLink = `https://badgerbot.net/g/${gift.id}`;
           const messageBody = `🦡 HONEY BADGER HERE! ${gift.senderName} sent you a special gift!\n\n` +
             `🎁 Gift: ${gift.type} - ${giftData.giftValue}\n\n` +
             `🎯 Your challenge: ${challenge.description}\n\n` +

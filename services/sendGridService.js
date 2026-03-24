@@ -317,7 +317,7 @@ The Honey Badger Team
 
     createApprovalNotificationHtml(submissionData) {
         const { recipientName, giftType, challengeDescription, photoUrl } = submissionData;
-        const baseUrl = process.env.BASE_URL || 'https://honeybadgerapp.com';
+        const baseUrl = process.env.BASE_URL || 'https://badgerbot.net';
 
         return `
 <!DOCTYPE html>
@@ -381,7 +381,7 @@ The Honey Badger Team
     // Text email templates
     createInitialEmailText(giftData) {
         const { recipientName, senderName, giftType, giftValue, challenge, message, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 Hi ${recipientName}!
@@ -409,7 +409,7 @@ The Honey Badger Team
 
     createReminderEmailText(giftData) {
         const { recipientName, challenge, progress, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 Hi ${recipientName}!
@@ -432,7 +432,7 @@ Your Honey Badger Coach
 
     createCompletionEmailText(giftData) {
         const { recipientName, giftType, giftValue, senderName, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 Hi ${recipientName}!
@@ -458,7 +458,7 @@ Your Honey Badger Coach
     // HTML email templates
     createInitialEmailHtml(giftData) {
         const { recipientName, senderName, giftType, giftValue, challenge, message, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 <!DOCTYPE html>
@@ -528,7 +528,7 @@ Your Honey Badger Coach
 
     createReminderEmailHtml(giftData) {
         const { recipientName, challenge, progress, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 <!DOCTYPE html>
@@ -587,7 +587,7 @@ Your Honey Badger Coach
 
     createCompletionEmailHtml(giftData) {
         const { recipientName, giftType, giftValue, senderName, giftId } = giftData;
-        const giftUrl = giftId ? `https://honeybadgerapp.com/gift/${giftId}` : 'https://honeybadgerapp.com';
+        const giftUrl = giftId ? `https://badgerbot.net/gift/${giftId}` : 'https://badgerbot.net';
 
         return `
 <!DOCTYPE html>
