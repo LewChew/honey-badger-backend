@@ -207,6 +207,21 @@ class DatabaseService {
             else console.log('✅ SMS opt-outs table ready');
         });
 
+        // SMS opt-in consent tracking table
+        const createSmsOptInsTable = `
+            CREATE TABLE IF NOT EXISTS sms_opt_ins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT UNIQUE NOT NULL,
+                opted_in_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                consent_method TEXT DEFAULT 'sms_keyword'
+            )
+        `;
+
+        this.db.run(createSmsOptInsTable, (err) => {
+            if (err) console.error('Error creating sms_opt_ins table:', err.message);
+            else console.log('✅ SMS opt-ins table ready');
+        });
+
         // Run migrations to update existing tables
         this.runMigrations();
     }
@@ -274,7 +289,9 @@ class DatabaseService {
                 { name: 'unlocked_at', type: 'DATETIME' },
                 { name: 'card_image_url', type: 'TEXT' },
                 { name: 'redeemed', type: 'BOOLEAN DEFAULT 0' },
-                { name: 'redeemed_at', type: 'DATETIME' }
+                { name: 'redeemed_at', type: 'DATETIME' },
+                { name: 'received', type: 'BOOLEAN DEFAULT 0' },
+                { name: 'received_at', type: 'DATETIME' }
             ];
 
             photoWorkflowColumns.forEach(column => {
@@ -1081,6 +1098,24 @@ class DatabaseService {
         });
     }
 
+    async markGiftReceived(trackingId) {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                UPDATE gift_orders
+                SET received = 1, received_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE tracking_id = ? AND received = 0
+            `;
+
+            this.db.run(sql, [trackingId], function(err) {
+                if (err) {
+                    reject(new Error('Mark gift received failed: ' + err.message));
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
     async getGiftOrderByTrackingId(trackingId) {
         return new Promise((resolve, reject) => {
             const sql = `
@@ -1181,6 +1216,37 @@ class DatabaseService {
             const sql = `DELETE FROM sms_opt_outs WHERE phone = ?`;
             this.db.run(sql, [phone], function(err) {
                 if (err) reject(new Error('Opt-in save failed: ' + err.message));
+                else resolve(this.changes > 0);
+            });
+        });
+    }
+
+    // SMS opt-in consent tracking
+    async hasPhoneOptedIn(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT id FROM sms_opt_ins WHERE phone = ?`;
+            this.db.get(sql, [phone], (err, row) => {
+                if (err) reject(new Error('Opt-in check failed: ' + err.message));
+                else resolve(!!row);
+            });
+        });
+    }
+
+    async addSmsOptIn(phone, method = 'sms_keyword') {
+        return new Promise((resolve, reject) => {
+            const sql = `INSERT OR REPLACE INTO sms_opt_ins (phone, opted_in_at, consent_method) VALUES (?, CURRENT_TIMESTAMP, ?)`;
+            this.db.run(sql, [phone, method], function(err) {
+                if (err) reject(new Error('Opt-in save failed: ' + err.message));
+                else resolve(true);
+            });
+        });
+    }
+
+    async removeSmsOptIn(phone) {
+        return new Promise((resolve, reject) => {
+            const sql = `DELETE FROM sms_opt_ins WHERE phone = ?`;
+            this.db.run(sql, [phone], function(err) {
+                if (err) reject(new Error('Opt-in removal failed: ' + err.message));
                 else resolve(this.changes > 0);
             });
         });

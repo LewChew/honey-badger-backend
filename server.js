@@ -1215,7 +1215,9 @@ app.get('/api/honey-badgers', authenticateToken, async (req, res) => {
             unlocked: order.unlocked === 1,
             unlockedAt: order.unlocked_at,
             redeemed: order.redeemed === 1,
-            redeemedAt: order.redeemed_at
+            redeemedAt: order.redeemed_at,
+            received: order.received === 1,
+            receivedAt: order.received_at
         }));
 
         res.json({
@@ -1272,7 +1274,9 @@ app.get('/api/my-received-gifts', authenticateToken, async (req, res) => {
             unlocked: gift.unlocked === 1,
             unlockedAt: gift.unlocked_at,
             redeemed: gift.redeemed === 1,
-            redeemedAt: gift.redeemed_at
+            redeemedAt: gift.redeemed_at,
+            received: gift.received === 1,
+            receivedAt: gift.received_at
         }));
 
         res.json({

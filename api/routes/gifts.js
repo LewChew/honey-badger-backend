@@ -245,7 +245,18 @@ router.post('/messages/send-reminder', async (req, res) => {
       type: giftOrder.gift_type
     };
 
-    const reminderMessage = customMessage || generateReminderMessage(gift, challenge);
+    // Check if recipient has opted in before sending reminders
+    if (gift.recipientPhone) {
+      const hasOptedIn = await db.hasPhoneOptedIn(gift.recipientPhone);
+      if (!hasOptedIn) {
+        return res.status(403).json({
+          success: false,
+          message: 'Recipient has not opted in to SMS yet. They must reply START to the initial message first.'
+        });
+      }
+    }
+
+    const reminderMessage = customMessage || await generateReminderMessage(gift, challenge);
 
     if (!twilioClient) {
       return res.status(503).json({
@@ -503,6 +514,82 @@ router.post('/gifts/:giftId/collect', async (req, res) => {
 });
 
 /**
+ * Mark a gift as received (viewed by recipient)
+ * POST /api/gifts/:giftId/mark-received
+ */
+router.post('/gifts/:giftId/mark-received', async (req, res) => {
+  try {
+    const { giftId } = req.params;
+
+    // Inline JWT auth
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authorization required' });
+    }
+    const jwt = require('jsonwebtoken');
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+    let userId;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch (jwtError) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    // Fetch gift
+    const giftOrder = await db.getGiftOrderByTrackingId(giftId);
+    if (!giftOrder) {
+      return res.status(404).json({ success: false, message: 'Gift not found' });
+    }
+
+    // Verify recipient ownership
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const isRecipient = (user.email && giftOrder.recipient_email && user.email.toLowerCase() === giftOrder.recipient_email.toLowerCase()) ||
+                        (user.phone && giftOrder.recipient_phone && user.phone === giftOrder.recipient_phone);
+    if (!isRecipient) {
+      return res.status(403).json({ success: false, message: 'Only the gift recipient can mark this gift as received' });
+    }
+
+    // Already received — return success with flag
+    if (giftOrder.received === 1) {
+      return res.json({
+        success: true,
+        data: { giftId, received: true, alreadyReceived: true }
+      });
+    }
+
+    // Mark as received
+    const wasFirstView = await db.markGiftReceived(giftId);
+
+    // Notify sender via SMS (fire-and-forget)
+    if (wasFirstView && giftOrder.sender_phone) {
+      try {
+        const recipientName = giftOrder.recipient_name || 'Someone';
+        await sendSmsWithOptOutCheck(
+          giftOrder.sender_phone,
+          `🦡 ${recipientName} just opened your Honey Badger gift!`
+        );
+      } catch (smsError) {
+        console.error('Failed to send received notification to sender:', smsError.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { giftId, received: true, receivedAt: new Date() }
+    });
+  } catch (error) {
+    console.error('Error marking gift as received:', error);
+    res.status(500).json({ success: false, message: 'Failed to mark gift as received', error: error.message });
+  }
+});
+
+/**
  * Send nudge message to recipient
  * POST /api/gifts/:giftId/nudge
  */
@@ -540,6 +627,12 @@ router.post('/gifts/:giftId/nudge', async (req, res) => {
     }
     if (!giftOrder.recipient_phone) {
       return res.status(400).json({ success: false, message: 'No recipient phone number on this gift' });
+    }
+
+    // Check if recipient has opted in (replied START) before sending reminders
+    const hasOptedIn = await db.hasPhoneOptedIn(giftOrder.recipient_phone);
+    if (!hasOptedIn) {
+      return res.status(403).json({ success: false, message: 'Recipient has not opted in to SMS yet. They must reply START to the initial message first.' });
     }
 
     // Build the nudge message
@@ -733,49 +826,48 @@ router.post('/webhooks/twilio/incoming', async (req, res) => {
 
     // Handle opt-out/opt-in keywords before anything else
     const lowerBody = (Body || '').toLowerCase().trim();
-    if (lowerBody === 'stop' || lowerBody === 'unsubscribe') {
+    if (lowerBody === 'stop' || lowerBody === 'unsubscribe' || lowerBody === 'cancel' || lowerBody === 'quit' || lowerBody === 'end') {
       await db.addSmsOptOut(From);
+      await db.removeSmsOptIn(From);
       console.log(`✅ Phone ${From} opted out of SMS`);
-      // Send final confirmation (bypass opt-out check)
+      // Send final confirmation (bypass opt-out check for this one message)
+      const actualTo = process.env.SMS_TEST_OVERRIDE_TO || From;
       await twilioClient.messages.create({
-        body: "You've been unsubscribed from Honey Badger messages. We'll miss you! 🍯\n\nReply START to resubscribe.",
+        body: `Honey Badger Gifts: You have been unsubscribed and will not receive any more messages. Reply START to re-subscribe. Reply HELP for help.`,
         from: process.env.TWILIO_PHONE_NUMBER,
-        to: From
+        to: actualTo
       });
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
-    if (lowerBody === 'start' || lowerBody === 'yes' || lowerBody === 'unstop') {
+    if (lowerBody === 'start' || lowerBody === 'yes' || lowerBody === 'unstop' || lowerBody === 'subscribe') {
       await db.removeSmsOptOut(From);
-      console.log(`✅ Phone ${From} re-subscribed to SMS`);
+      await db.addSmsOptIn(From, 'sms_keyword');
+      console.log(`✅ Phone ${From} opted in to SMS`);
 
       // Look up active gifts for this recipient to build a deep link
       const activeGifts = await db.getActiveGiftsByRecipientPhone(From);
       const baseUrl = process.env.BASE_URL || 'https://badgerbot.net';
       const badgerImageUrl = `${baseUrl}/images/honey-badger.png`;
 
-      let messageBody;
+      let giftLine = '';
       if (activeGifts && activeGifts.length > 0) {
         const gift = activeGifts[0];
         const giftLink = `https://badgerbot.net/g/${gift.tracking_id}`;
         const senderName = gift.sender_name || 'Someone special';
-        messageBody = `🦡 LET'S GO! The Honey Badger is fired up!\n\n` +
-          `${senderName} sent you a gift — complete your challenge to unlock it!\n\n` +
-          `👉 Open your gift: ${giftLink}\n\n` +
-          `Don't have the app? Download it and tap the link above to get started!\n\n` +
-          `Reply STOP at any time to opt out.`;
-      } else {
-        messageBody = `🦡 Welcome back! You've been re-subscribed to Honey Badger messages.\n\n` +
-          `You'll receive notifications about your gift challenges.\n\n` +
-          `Reply STOP at any time to opt out.`;
+        giftLine = `\n${senderName} sent you a gift — complete your challenge to unlock it!\n\n👉 Open your gift: ${giftLink}\n`;
       }
+
+      const messageBody = `Honey Badger Gifts: You are now subscribed to gift notifications and challenge updates.` +
+        giftLine +
+        `\nMsg frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.`;
 
       await sendSmsWithOptOutCheck(From, messageBody, badgerImageUrl);
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
-    if (lowerBody === 'help') {
-      await sendSmsWithOptOutCheck(From, "🍯 HONEY BADGER HELP 🍯\n\nAvailable commands:\nSTATUS - Check progress\nSTART - Re-subscribe to messages\nHELP - Show this message\nSTOP - Unsubscribe\n\nQuestions? Visit https://badgerbot.net");
+    if (lowerBody === 'help' || lowerBody === 'info') {
+      await sendSmsWithOptOutCheck(From, `Honey Badger Gifts: Gift notification & challenge reminder service. Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel. For support visit https://badgerbot.net or email support@badgerbot.net`);
       return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
 
@@ -1557,13 +1649,11 @@ async function sendInitialMessage(gift, challenge) {
       } else {
         try {
           const giftLink = `https://badgerbot.net/g/${gift.id}`;
-          const messageBody = `🦡 HONEY BADGER HERE! ${gift.senderName} sent you a special gift!\n\n` +
-            `🎁 Gift: ${gift.type} - ${giftData.giftValue}\n\n` +
-            `🎯 Your challenge: ${challenge.description}\n\n` +
-            `Complete it to unlock your gift! I'll be here to help and motivate you. Let's do this!\n\n` +
+          const messageBody = `Honey Badger Gifts: ${gift.senderName} sent you a gift!\n\n` +
+            `🎁 ${gift.type} - ${giftData.giftValue}\n` +
+            `🎯 Challenge: ${challenge.description}\n\n` +
             `👉 Open your gift: ${giftLink}\n\n` +
-            `Reply START when you're ready to begin!\n\n` +
-            `Reply STOP to opt out. Msg & data rates may apply.`;
+            `Reply START to accept and receive challenge updates. Msg frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.`;
 
           const message = await sendSmsWithOptOutCheck(gift.recipientPhone, messageBody);
 

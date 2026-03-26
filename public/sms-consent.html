@@ -137,7 +137,7 @@
         <header>
             <h1>SMS Consent Policy</h1>
             <p class="subtitle">Honey Badger Gift Notification Service</p>
-            <p class="last-updated">Last Updated: February 18, 2026</p>
+            <p class="last-updated">Last Updated: March 25, 2026</p>
         </header>
 
         <section>
@@ -147,57 +147,82 @@
 
         <section>
             <h2>How We Collect SMS Consent</h2>
-            <p>Consent for SMS messages from <strong>Honey Badger</strong> is collected in the following ways:</p>
+            <p>Consent for SMS messages from <strong>Honey Badger Gifts</strong> is collected through an explicit two-step opt-in process:</p>
+
+            <h3>Step 1: One-Time Informational Message</h3>
+            <p>When a gift sender creates a gift and provides the recipient's phone number, the recipient receives a <strong>single informational SMS</strong> notifying them of the gift. This initial message includes:</p>
             <ul>
-                <li><strong>Gift Sender Initiated:</strong> When a user sends a gift through the Honey Badger app, they provide the recipient's phone number. The recipient receives an initial SMS notification about their gift, which includes opt-out instructions. By replying <code>START</code> or <code>YES</code>, the recipient confirms consent to receive additional messages about their challenge.</li>
-                <li><strong>Account Registration Opt-In:</strong> Users who create a Honey Badger account can opt in to receive SMS messages by providing their phone number and checking the consent checkbox, which states: <em>"I agree to receive SMS text messages from Honey Badger regarding gift notifications, challenge reminders, and account updates. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time."</em></li>
+                <li>The program name (Honey Badger Gifts)</li>
+                <li>A description of the gift and challenge</li>
+                <li>A clear call-to-action: <em>"Reply START to accept and receive challenge updates"</em></li>
+                <li>Message frequency disclosure: <em>"Msg frequency varies"</em></li>
+                <li>Rate disclosure: <em>"Msg & data rates may apply"</em></li>
+                <li>Opt-out instructions: <em>"Reply HELP for help. Reply STOP to opt out."</em></li>
             </ul>
+            <p><strong>No additional messages are sent unless the recipient explicitly opts in.</strong></p>
+
+            <h3>Step 2: Explicit Opt-In via Keyword</h3>
+            <p>The recipient must reply with the keyword <code>START</code> or <code>YES</code> to consent to receiving ongoing messages. Upon opting in, the recipient receives a confirmation message that includes:</p>
+            <ul>
+                <li>Program name: Honey Badger Gifts</li>
+                <li>Description: <em>"You are now subscribed to gift notifications and challenge updates"</em></li>
+                <li>Frequency: <em>"Msg frequency varies"</em></li>
+                <li>Rate disclosure: <em>"Msg & data rates may apply"</em></li>
+                <li>Help instructions: <em>"Reply HELP for help"</em></li>
+                <li>Opt-out instructions: <em>"Reply STOP to opt out"</em></li>
+            </ul>
+
+            <h3>Gift Sender Consent</h3>
+            <p>Before a gift sender can provide a recipient's phone number, they must acknowledge the SMS disclosure in the Honey Badger app, which states: <em>"I acknowledge the recipient will be asked to consent to receive SMS messages."</em> The sender's acknowledgment and timestamp are recorded.</p>
+
             <div class="highlight-box">
-                <strong>Consent Language:</strong> By opting in to Honey Badger SMS messages, you agree to receive text messages from <strong>Honey Badger</strong> at the phone number you provide. Consent is not a condition of any purchase. You may revoke consent at any time by replying <code>STOP</code>.
+                <strong>Consent Language:</strong> By replying START to Honey Badger Gifts, you consent to receive text messages regarding gift notifications, challenge reminders, and completion updates at the phone number you are texting from. Consent is not a condition of any purchase. Message frequency varies. Message and data rates may apply. Reply HELP for help. Reply STOP to cancel at any time.
             </div>
         </section>
 
         <section>
             <h2>Types of Messages We Send</h2>
-            <p>Honey Badger sends the following types of SMS messages:</p>
+            <p>Honey Badger Gifts sends the following types of SMS messages:</p>
             <ul>
-                <li><strong>Gift Notifications:</strong> Initial message alerting recipients that they have received a gift and providing details about the associated challenge.</li>
-                <li><strong>Challenge Reminders:</strong> Periodic reminders about active challenges (frequency determined by sender settings).</li>
-                <li><strong>Completion Confirmations:</strong> Messages confirming when a challenge has been completed and the gift is available.</li>
-                <li><strong>Account Notifications:</strong> Important account-related updates for registered users.</li>
+                <li><strong>Initial Gift Notification (before opt-in):</strong> A single one-time message alerting the recipient that a gift is waiting, with instructions to reply START to opt in. No further messages are sent until the recipient opts in.</li>
+                <li><strong>Challenge Reminders (after opt-in only):</strong> Motivational reminders about active challenges. Only sent after the recipient replies START.</li>
+                <li><strong>Progress Updates (after opt-in only):</strong> Messages confirming progress on challenge steps.</li>
+                <li><strong>Completion Confirmations (after opt-in only):</strong> A message confirming the challenge is complete and the gift is unlocked.</li>
             </ul>
         </section>
 
         <section>
             <h2>Message Frequency</h2>
-            <p>The frequency of messages varies based on gift and challenge settings:</p>
+            <p>Message frequency varies based on gift and challenge settings:</p>
             <ul>
-                <li><strong>Initial Notification:</strong> One message when a gift is sent.</li>
-                <li><strong>Reminders:</strong> Based on sender configuration (none, daily, or weekly).</li>
-                <li><strong>Completion Message:</strong> One message when the challenge is completed.</li>
+                <li><strong>Before opt-in:</strong> Exactly 1 message (the initial gift notification).</li>
+                <li><strong>After opt-in:</strong> Reminders based on sender configuration (none, daily, or weekly). Typically 1-5 messages per gift depending on challenge duration.</li>
+                <li><strong>Completion:</strong> 1 message when the challenge is completed.</li>
             </ul>
-            <p>Typical recipients receive 1-5 messages per gift, depending on challenge duration and reminder settings.</p>
+            <p><strong>Message frequency varies. Message and data rates may apply.</strong></p>
         </section>
 
         <section>
             <h2>Opting Out</h2>
             <div class="opt-out-box">
-                <p><strong>To stop receiving SMS messages from Honey Badger:</strong></p>
-                <p>Reply <code>STOP</code> to any message you receive from us.</p>
-                <p>You will receive a confirmation message and will no longer receive SMS messages from our service.</p>
+                <p><strong>To stop receiving SMS messages from Honey Badger Gifts:</strong></p>
+                <p>Reply <code>STOP</code>, <code>CANCEL</code>, <code>QUIT</code>, <code>END</code>, or <code>UNSUBSCRIBE</code> to any message you receive from us.</p>
+                <p>You will receive a single confirmation message: <em>"Honey Badger Gifts: You have been unsubscribed and will not receive any more messages. Reply START to re-subscribe. Reply HELP for help."</em></p>
+                <p>No further messages will be sent after the confirmation.</p>
             </div>
-            <p>Note: Opting out of SMS messages will not affect your ability to receive gifts. You can still access gifts through email or the Honey Badger website.</p>
+            <p>Note: Opting out of SMS messages will not affect your ability to receive gifts. You can still access gifts through email or the Honey Badger app.</p>
         </section>
 
         <section>
             <h2>Getting Help</h2>
             <div class="contact-info">
                 <p><strong>For SMS assistance:</strong></p>
-                <p>Reply <code>HELP</code> to any message for support information.</p>
+                <p>Reply <code>HELP</code> or <code>INFO</code> to any message. You will receive: <em>"Honey Badger Gifts: Gift notification & challenge reminder service. Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel."</em></p>
             </div>
             <p>You can also contact our support team directly:</p>
             <ul>
-                <li><strong>Email:</strong> support@honeybadger.gifts</li>
+                <li><strong>Email:</strong> support@badgerbot.net</li>
+                <li><strong>Website:</strong> <a href="https://badgerbot.net">badgerbot.net</a></li>
             </ul>
         </section>
 
@@ -210,13 +235,13 @@
 
         <section>
             <h2>Privacy &amp; Data Protection</h2>
-            <p>Your phone number and personal information are handled in accordance with our <a href="/privacy">Privacy Policy</a>. <strong>No mobile information collected as part of the Honey Badger SMS opt-in will be shared with or sold to third parties or affiliates for marketing or promotional purposes.</strong></p>
+            <p>Your phone number and personal information are handled in accordance with our <a href="/privacy.html">Privacy Policy</a>. <strong>No mobile information collected as part of the Honey Badger SMS opt-in will be shared with or sold to third parties or affiliates for marketing or promotional purposes.</strong></p>
             <p>We only use your phone number to deliver gift notifications, challenge reminders, completion confirmations, and account-related messages as described in this policy.</p>
-            <p>For full details on how we collect, use, and protect your data, please review our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</p>
+            <p>For full details on how we collect, use, and protect your data, please review our <a href="/privacy.html">Privacy Policy</a> and <a href="/terms.html">Terms of Service</a>.</p>
         </section>
 
         <footer>
-            <p><a href="/privacy">Privacy Policy</a> | <a href="/terms">Terms of Service</a></p>
+            <p><a href="/privacy.html">Privacy Policy</a> | <a href="/terms.html">Terms of Service</a></p>
             <p>&copy; 2026 Honey Badger. All rights reserved.</p>
         </footer>
     </div>
