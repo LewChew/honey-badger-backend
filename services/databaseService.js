@@ -222,6 +222,30 @@ class DatabaseService {
             else console.log('✅ SMS opt-ins table ready');
         });
 
+        // SMS message log table (delivery tracking)
+        const createSmsMessagesTable = `
+            CREATE TABLE IF NOT EXISTS sms_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_sid TEXT UNIQUE,
+                to_phone TEXT NOT NULL,
+                from_phone TEXT,
+                body TEXT,
+                media_url TEXT,
+                direction TEXT DEFAULT 'outbound',
+                status TEXT DEFAULT 'queued',
+                error_code TEXT,
+                error_message TEXT,
+                gift_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `;
+
+        this.db.run(createSmsMessagesTable, (err) => {
+            if (err) console.error('Error creating sms_messages table:', err.message);
+            else console.log('✅ SMS messages table ready');
+        });
+
         // Run migrations to update existing tables
         this.runMigrations();
     }
@@ -325,7 +349,11 @@ class DatabaseService {
             'CREATE INDEX IF NOT EXISTS idx_photo_submissions_gift_id ON photo_submissions(gift_id)',
             'CREATE INDEX IF NOT EXISTS idx_photo_submissions_status ON photo_submissions(status)',
             'CREATE INDEX IF NOT EXISTS idx_reset_tokens_token ON password_reset_tokens(token)',
-            'CREATE INDEX IF NOT EXISTS idx_reset_tokens_email ON password_reset_tokens(email)'
+            'CREATE INDEX IF NOT EXISTS idx_reset_tokens_email ON password_reset_tokens(email)',
+            'CREATE INDEX IF NOT EXISTS idx_sms_messages_message_sid ON sms_messages(message_sid)',
+            'CREATE INDEX IF NOT EXISTS idx_sms_messages_to_phone ON sms_messages(to_phone)',
+            'CREATE INDEX IF NOT EXISTS idx_sms_messages_status ON sms_messages(status)',
+            'CREATE INDEX IF NOT EXISTS idx_sms_messages_gift_id ON sms_messages(gift_id)'
         ];
 
         indexes.forEach(indexSql => {
@@ -1248,6 +1276,47 @@ class DatabaseService {
             this.db.run(sql, [phone], function(err) {
                 if (err) reject(new Error('Opt-in removal failed: ' + err.message));
                 else resolve(this.changes > 0);
+            });
+        });
+    }
+
+    // SMS message logging
+    async logOutboundMessage(messageSid, to, from, body, mediaUrl, giftId) {
+        return new Promise((resolve, reject) => {
+            const sql = `INSERT INTO sms_messages (message_sid, to_phone, from_phone, body, media_url, direction, gift_id) VALUES (?, ?, ?, ?, ?, 'outbound', ?)`;
+            this.db.run(sql, [messageSid, to, from, body, mediaUrl || null, giftId || null], function(err) {
+                if (err) reject(new Error('Message log failed: ' + err.message));
+                else resolve(this.lastID);
+            });
+        });
+    }
+
+    async logInboundMessage(messageSid, from, body, mediaUrl) {
+        return new Promise((resolve, reject) => {
+            const sql = `INSERT INTO sms_messages (message_sid, to_phone, from_phone, body, media_url, direction, status) VALUES (?, ?, ?, ?, ?, 'inbound', 'received')`;
+            this.db.run(sql, [process.env.TWILIO_PHONE_NUMBER || null, from, body, mediaUrl || null], function(err) {
+                if (err) reject(new Error('Inbound message log failed: ' + err.message));
+                else resolve(this.lastID);
+            });
+        });
+    }
+
+    async updateMessageStatus(messageSid, status, errorCode, errorMessage) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE sms_messages SET status = ?, error_code = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE message_sid = ?`;
+            this.db.run(sql, [status, errorCode || null, errorMessage || null, messageSid], function(err) {
+                if (err) reject(new Error('Message status update failed: ' + err.message));
+                else resolve(this.changes > 0);
+            });
+        });
+    }
+
+    async getMessagesByGiftId(giftId) {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT * FROM sms_messages WHERE gift_id = ? ORDER BY created_at DESC`;
+            this.db.all(sql, [giftId], (err, rows) => {
+                if (err) reject(new Error('Message lookup failed: ' + err.message));
+                else resolve(rows || []);
             });
         });
     }

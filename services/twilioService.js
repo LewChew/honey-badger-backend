@@ -15,24 +15,34 @@ class TwilioService {
                 process.env.TWILIO_AUTH_TOKEN
             );
             this.phoneNumber = process.env.TWILIO_PHONE_NUMBER;
-            console.log('✅ Twilio service initialized');
+            this.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID || null;
+            this.statusCallbackUrl = process.env.TWILIO_STATUS_CALLBACK_URL || null;
+            console.log('✅ Twilio service initialized' + (this.messagingServiceSid ? ' (Messaging Service)' : ' (direct number)'));
         } catch (error) {
             console.error('❌ Failed to initialize Twilio service:', error.message);
             this.client = null;
         }
     }
 
+    isInitialized() {
+        return !!this.client;
+    }
+
     /**
      * Send SMS message (checks opt-out status first)
+     * Uses Messaging Service SID when available, falls back to direct phone number.
      * @param {string} to - Recipient phone number (E.164 format)
      * @param {string} body - Message body
-     * @param {object} options - Additional options (mediaUrl, statusCallback, etc.)
+     * @param {object} options - Additional options
      * @param {boolean} options.bypassOptOut - If true, send even if opted out (for STOP confirmation only)
+     * @param {string} options.mediaUrl - MMS media URL
+     * @param {string} options.giftId - Associated gift ID for logging
      * @returns {Promise} - Twilio message response
      */
     async sendSMS(to, body, options = {}) {
         if (!this.client) {
-            throw new Error('Twilio service not initialized. Check your credentials.');
+            console.warn('⚠️  Twilio not initialized, SMS not sent');
+            return null;
         }
 
         if (!to || !body) {
@@ -52,22 +62,73 @@ class TwilioService {
             }
         }
 
-        const { bypassOptOut, ...twilioOptions } = options;
+        // Apply test override
+        const actualTo = process.env.SMS_TEST_OVERRIDE_TO || to;
+        if (process.env.SMS_TEST_OVERRIDE_TO) {
+            console.log(`📱 SMS test mode: redirecting from ${to} -> ${actualTo}`);
+        }
+
+        const { bypassOptOut, mediaUrl, giftId, ...extraOptions } = options;
+
+        // Build message params
+        const messageParams = { to: actualTo, body, ...extraOptions };
+
+        // Use Messaging Service SID when available, fall back to phone number
+        if (this.messagingServiceSid) {
+            messageParams.messagingServiceSid = this.messagingServiceSid;
+        } else {
+            messageParams.from = this.phoneNumber;
+        }
+
+        // Add media URL for MMS
+        if (mediaUrl) {
+            messageParams.mediaUrl = [mediaUrl];
+        }
+
+        // Add status callback if configured
+        if (this.statusCallbackUrl) {
+            messageParams.statusCallback = this.statusCallbackUrl;
+        }
 
         try {
-            const message = await this.client.messages.create({
-                to,
-                from: this.phoneNumber,
-                body,
-                ...twilioOptions
-            });
-
+            const message = await this.client.messages.create(messageParams);
             console.log(`✅ SMS sent successfully: ${message.sid}`);
+
+            // Log outbound message (non-blocking)
+            try {
+                await db.logOutboundMessage(
+                    message.sid,
+                    actualTo,
+                    message.from || this.phoneNumber,
+                    body,
+                    mediaUrl || null,
+                    giftId || null
+                );
+            } catch (logErr) {
+                console.error('⚠️  Failed to log outbound message:', logErr.message);
+            }
+
             return message;
         } catch (error) {
             console.error('❌ Failed to send SMS:', error.message);
             throw error;
         }
+    }
+
+    /**
+     * Returns Express middleware for Twilio webhook signature validation.
+     * In production, validates signatures. In dev/test or when explicitly skipped, passes through.
+     */
+    getWebhookMiddleware() {
+        const skipValidation = process.env.SKIP_TWILIO_SIGNATURE_VALIDATION === 'true' ||
+            process.env.NODE_ENV === 'development' ||
+            process.env.NODE_ENV === 'test';
+
+        if (skipValidation) {
+            return (req, res, next) => next();
+        }
+
+        return twilio.webhook({ validate: true });
     }
 
     /**

@@ -13,11 +13,16 @@ const db = require('./services/databaseService');
 const sendGridService = require('./services/sendGridService');
 
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy (for Twilio webhook signature validation)
 const PORT = process.env.PORT || 3000;
 
 // Validate Twilio environment variables
 if (process.env.ENABLE_SMS === 'true') {
-    const requiredTwilioVars = ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER'];
+    // TWILIO_PHONE_NUMBER is only required if no TWILIO_MESSAGING_SERVICE_SID
+    const requiredTwilioVars = ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'];
+    if (!process.env.TWILIO_MESSAGING_SERVICE_SID) {
+        requiredTwilioVars.push('TWILIO_PHONE_NUMBER');
+    }
     const missingVars = requiredTwilioVars.filter(varName => !process.env[varName]);
 
     if (missingVars.length > 0) {
@@ -1421,8 +1426,15 @@ app.listen(PORT, () => {
     if (process.env.ENABLE_SMS === 'true' && process.env.TWILIO_ACCOUNT_SID) {
         console.log('');
         console.log('Twilio Configuration:');
-        console.log(`  📞 Phone Number: ${process.env.TWILIO_PHONE_NUMBER}`);
+        if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
+            console.log(`  📨 Messaging Service: ${process.env.TWILIO_MESSAGING_SERVICE_SID}`);
+        } else {
+            console.log(`  📞 Phone Number: ${process.env.TWILIO_PHONE_NUMBER}`);
+        }
         console.log(`  🔗 Webhook URL: ${process.env.WEBHOOK_BASE_URL}${process.env.TWILIO_WEBHOOK_PATH || '/api/webhooks/twilio/incoming'}`);
+        if (process.env.TWILIO_STATUS_CALLBACK_URL) {
+            console.log(`  📊 Status Callback: ${process.env.TWILIO_STATUS_CALLBACK_URL}`);
+        }
     }
     
     console.log('================================');
